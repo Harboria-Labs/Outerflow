@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
+import { ChevronsLeft, ChevronsRight } from 'lucide-react';
 import type {
   CadPartConfig,
   CadPrimitiveKind,
@@ -13,6 +14,7 @@ import type {
   ShapeKind,
   SoftSimConfig,
   SoftSimKind,
+  StageSettings,
   StudioEntity,
   StudioJoint,
   StudioMode,
@@ -20,9 +22,8 @@ import type {
   SweepTrialResult,
   TelemetrySample,
   Vec3,
-  ViewportOverlays,
 } from './types/studio';
-import { StudioViewport } from './viewport/StudioViewport';
+import { StudioViewport, createDefaultStageSettings } from './viewport/StudioViewport';
 import { RapierPhysicsEngine } from './engines/physics/rapierEngine';
 import { getPhysicsPresets } from './engines/physics/presets';
 import {
@@ -112,13 +113,11 @@ export const App: React.FC = () => {
   const [fps, setFps] = useState(60);
   const [simTime, setSimTime] = useState(0);
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('translate');
-  const [overlays, setOverlays] = useState<ViewportOverlays>({
-    showGrid: true,
-    showAxes: true,
-    showWireframe: false,
-    showColliders: false,
-    lighting: 'studio',
-  });
+  const [stage, setStage] = useState<StageSettings>(() => createDefaultStageSettings());
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [telemetryOpen, setTelemetryOpen] = useState(false);
+  const [meshStats, setMeshStats] = useState({ vertices: 0, triangles: 0 });
 
   // Physics State
   const [activePhysicsPresetId, setActivePhysicsPresetId] = useState(initialPreset.id);
@@ -214,11 +213,18 @@ export const App: React.FC = () => {
   const physicsRebuildPendingRef = useRef(false);
   const skipCadRebuildRef = useRef(false);
 
+  const refreshStats = useCallback((activeMode: StudioMode) => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    setMeshStats(vp.getSceneMeshStats(activeMode));
+  }, []);
+
   const syncPhysicsWorldAndViewport = useCallback(
     async (nextEntities: StudioEntity[], nextJoints: StudioJoint[], nextGravity: Vec3) => {
       const vp = viewportRef.current;
       if (!vp) return;
       vp.syncPhysicsEntities(nextEntities);
+      refreshStats(modeRef.current);
       await rapierRef.current.rebuild(nextEntities, nextJoints, nextGravity);
       vp.updateJointDebug(rapierRef.current.getJointWorldSegments());
       setSimTime(0);
@@ -226,134 +232,150 @@ export const App: React.FC = () => {
       setRecordedFrames([]);
       setPlaybackIndex(null);
     },
-    []
+    [refreshStats]
   );
 
-  const rebuildMathViewport = useCallback((cfg: MathConfig) => {
-    const vp = viewportRef.current;
-    if (!vp) return;
+  const rebuildMathViewport = useCallback(
+    (cfg: MathConfig) => {
+      const vp = viewportRef.current;
+      if (!vp) return;
 
-    // Dispose old math children
-    mathRuntimeRef.current.vectorHandle?.dispose();
-    vp.mathGroup.traverse((obj) => {
-      const m = obj as THREE.Mesh | THREE.Line;
-      if (m.geometry) m.geometry.dispose();
-      if (m.material) {
-        if (Array.isArray(m.material)) m.material.forEach((mt) => mt.dispose());
-        else m.material.dispose();
+      mathRuntimeRef.current.vectorHandle?.dispose();
+      vp.mathGroup.traverse((obj) => {
+        const m = obj as THREE.Mesh | THREE.Line;
+        if (m.geometry) m.geometry.dispose();
+        const base = m.userData?.baseMaterial as THREE.Material | undefined;
+        const albedo = m.userData?.albedoMaterial as THREE.Material | undefined;
+        base?.dispose();
+        albedo?.dispose();
+        if (m.material && m.material !== base && m.material !== albedo) {
+          if (Array.isArray(m.material)) m.material.forEach((mt) => mt.dispose());
+          else m.material.dispose();
+        }
+      });
+      vp.mathGroup.clear();
+      mathRuntimeRef.current = { odeCursor: 0 };
+
+      if (cfg.activeKind === 'parametric') {
+        const res = buildParametricSurface(cfg.parametric);
+        setMathErrors(res.errors);
+        setMathStats({ vertices: res.vertexCount, triangles: res.triangleCount });
+        if (res.vertexCount > 0) {
+          const mat = new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            side: THREE.DoubleSide,
+            roughness: 0.3,
+            metalness: 0.15,
+            wireframe: cfg.parametric.wireframe,
+          });
+          const mesh = new THREE.Mesh(res.geometry, mat);
+          mesh.position.set(0, 2.5, 0);
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          mesh.userData.baseMaterial = mat;
+          vp.mathGroup.add(mesh);
+          mathRuntimeRef.current.surfaceGeomForExport = res.geometry;
+        }
+      } else if (cfg.activeKind === 'explicit') {
+        const res = buildExplicitSurface(cfg.explicit, 0);
+        setMathErrors(res.error ? [res.error] : []);
+        setMathStats({ vertices: res.vertexCount, triangles: res.triangleCount });
+        if (res.vertexCount > 0) {
+          const mat = new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            side: THREE.DoubleSide,
+            roughness: 0.25,
+            metalness: 0.2,
+            wireframe: cfg.explicit.wireframe,
+          });
+          const mesh = new THREE.Mesh(res.geometry, mat);
+          mesh.position.set(0, 2.2, 0);
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          mesh.userData.baseMaterial = mat;
+          vp.mathGroup.add(mesh);
+          mathRuntimeRef.current.explicitGeom = res.geometry;
+          mathRuntimeRef.current.explicitMesh = mesh;
+          mathRuntimeRef.current.surfaceGeomForExport = res.geometry;
+        }
+      } else if (cfg.activeKind === 'implicit') {
+        const res = buildImplicitSurface(cfg.implicit);
+        setMathErrors(res.error ? [res.error] : []);
+        setMathStats({ vertices: res.vertexCount, triangles: res.triangleCount });
+        if (res.vertexCount > 0) {
+          const mat = new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            side: THREE.DoubleSide,
+            roughness: 0.28,
+            metalness: 0.2,
+            wireframe: cfg.implicit.wireframe,
+          });
+          const mesh = new THREE.Mesh(res.geometry, mat);
+          mesh.position.set(0, cfg.implicit.bound + 0.3, 0);
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          mesh.userData.baseMaterial = mat;
+          vp.mathGroup.add(mesh);
+          mathRuntimeRef.current.surfaceGeomForExport = res.geometry;
+        }
+      } else if (cfg.activeKind === 'ode') {
+        const res = solveOdeSystem(cfg.ode);
+        setMathErrors(res.errors);
+        const totalVerts = res.trajectories.reduce((acc, t) => acc + t.rawStates.length, 0);
+        setMathStats({ vertices: totalVerts, triangles: 0 });
+        const { group, heads } = buildOdeGroup(res);
+        vp.mathGroup.add(group);
+        mathRuntimeRef.current.odeHeads = heads;
+        mathRuntimeRef.current.odeTrajectories = res.trajectories;
+        mathRuntimeRef.current.odeCursor = 0;
+      } else if (cfg.activeKind === 'vectorField') {
+        const handle = buildVectorFieldScene(cfg.vectorField);
+        setMathErrors(handle.errors);
+        setMathStats({ vertices: 0, triangles: 0 });
+        vp.mathGroup.add(handle.group);
+        mathRuntimeRef.current.vectorHandle = handle;
       }
-    });
-    vp.mathGroup.clear();
-    mathRuntimeRef.current = { odeCursor: 0 };
 
-    if (cfg.activeKind === 'parametric') {
-      const res = buildParametricSurface(cfg.parametric);
-      setMathErrors(res.errors);
-      setMathStats({ vertices: res.vertexCount, triangles: res.triangleCount });
-      if (res.vertexCount > 0) {
-        const mat = new THREE.MeshStandardMaterial({
-          vertexColors: true,
-          side: THREE.DoubleSide,
-          roughness: 0.3,
-          metalness: 0.15,
-          wireframe: cfg.parametric.wireframe,
-        });
-        const mesh = new THREE.Mesh(res.geometry, mat);
-        mesh.position.set(0, 2.5, 0);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        vp.mathGroup.add(mesh);
-        mathRuntimeRef.current.surfaceGeomForExport = res.geometry;
+      vp.applyStageToDomainGroups();
+      refreshStats(modeRef.current);
+    },
+    [refreshStats]
+  );
+
+  const rebuildSoftViewport = useCallback(
+    (cfg: SoftSimConfig) => {
+      const vp = viewportRef.current;
+      if (!vp) return;
+
+      softRuntimeRef.current.particles?.dispose();
+      softRuntimeRef.current.cloth?.dispose();
+      softRuntimeRef.current.sph?.dispose();
+      softRuntimeRef.current.wave?.dispose();
+      softRuntimeRef.current = {};
+      vp.softGroup.clear();
+
+      if (cfg.activeKind === 'particles') {
+        const eng = new ParticleFieldEngine(cfg.particles.count, cfg.particles.preset);
+        softRuntimeRef.current.particles = eng;
+        vp.softGroup.add(eng.createMesh(cfg.colormap));
+      } else if (cfg.activeKind === 'cloth') {
+        const cloth = new ClothSolver(22, 22, 4.0, 3.4);
+        cloth.setPinMode(cfg.cloth.pinMode);
+        softRuntimeRef.current.cloth = cloth;
+        vp.softGroup.add(cloth.createMesh(cfg.cloth, cfg.colormap));
+      } else if (cfg.activeKind === 'sphFluid') {
+        const sph = new SphFluidSolver(cfg.sphFluid.particleCount, cfg.sphFluid.tankHalfWidth);
+        softRuntimeRef.current.sph = sph;
+        vp.softGroup.add(sph.createMesh(cfg.sphFluid, cfg.colormap));
+      } else {
+        const wave = new WaveTankSolver(56, 7.2);
+        softRuntimeRef.current.wave = wave;
+        vp.softGroup.add(wave.createMesh(cfg.colormap));
       }
-    } else if (cfg.activeKind === 'explicit') {
-      const res = buildExplicitSurface(cfg.explicit, 0);
-      setMathErrors(res.error ? [res.error] : []);
-      setMathStats({ vertices: res.vertexCount, triangles: res.triangleCount });
-      if (res.vertexCount > 0) {
-        const mat = new THREE.MeshStandardMaterial({
-          vertexColors: true,
-          side: THREE.DoubleSide,
-          roughness: 0.25,
-          metalness: 0.2,
-          wireframe: cfg.explicit.wireframe,
-        });
-        const mesh = new THREE.Mesh(res.geometry, mat);
-        mesh.position.set(0, 2.2, 0);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        vp.mathGroup.add(mesh);
-        mathRuntimeRef.current.explicitGeom = res.geometry;
-        mathRuntimeRef.current.explicitMesh = mesh;
-        mathRuntimeRef.current.surfaceGeomForExport = res.geometry;
-      }
-    } else if (cfg.activeKind === 'implicit') {
-      const res = buildImplicitSurface(cfg.implicit);
-      setMathErrors(res.error ? [res.error] : []);
-      setMathStats({ vertices: res.vertexCount, triangles: res.triangleCount });
-      if (res.vertexCount > 0) {
-        const mat = new THREE.MeshStandardMaterial({
-          vertexColors: true,
-          side: THREE.DoubleSide,
-          roughness: 0.28,
-          metalness: 0.2,
-          wireframe: cfg.implicit.wireframe,
-        });
-        const mesh = new THREE.Mesh(res.geometry, mat);
-        mesh.position.set(0, cfg.implicit.bound + 0.3, 0);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        vp.mathGroup.add(mesh);
-        mathRuntimeRef.current.surfaceGeomForExport = res.geometry;
-      }
-    } else if (cfg.activeKind === 'ode') {
-      const res = solveOdeSystem(cfg.ode);
-      setMathErrors(res.errors);
-      const totalVerts = res.trajectories.reduce((acc, t) => acc + t.rawStates.length, 0);
-      setMathStats({ vertices: totalVerts, triangles: 0 });
-      const { group, heads } = buildOdeGroup(res);
-      vp.mathGroup.add(group);
-      mathRuntimeRef.current.odeHeads = heads;
-      mathRuntimeRef.current.odeTrajectories = res.trajectories;
-      mathRuntimeRef.current.odeCursor = 0;
-    } else if (cfg.activeKind === 'vectorField') {
-      const handle = buildVectorFieldScene(cfg.vectorField);
-      setMathErrors(handle.errors);
-      setMathStats({ vertices: 0, triangles: 0 });
-      vp.mathGroup.add(handle.group);
-      mathRuntimeRef.current.vectorHandle = handle;
-    }
-  }, []);
-
-  const rebuildSoftViewport = useCallback((cfg: SoftSimConfig) => {
-    const vp = viewportRef.current;
-    if (!vp) return;
-
-    softRuntimeRef.current.particles?.dispose();
-    softRuntimeRef.current.cloth?.dispose();
-    softRuntimeRef.current.sph?.dispose();
-    softRuntimeRef.current.wave?.dispose();
-    softRuntimeRef.current = {};
-    vp.softGroup.clear();
-
-    if (cfg.activeKind === 'particles') {
-      const eng = new ParticleFieldEngine(cfg.particles.count, cfg.particles.preset);
-      softRuntimeRef.current.particles = eng;
-      vp.softGroup.add(eng.createMesh(cfg.colormap));
-    } else if (cfg.activeKind === 'cloth') {
-      const cloth = new ClothSolver(22, 22, 4.0, 3.4);
-      cloth.setPinMode(cfg.cloth.pinMode);
-      softRuntimeRef.current.cloth = cloth;
-      vp.softGroup.add(cloth.createMesh(cfg.cloth, cfg.colormap));
-    } else if (cfg.activeKind === 'sphFluid') {
-      const sph = new SphFluidSolver(cfg.sphFluid.particleCount, cfg.sphFluid.tankHalfWidth);
-      softRuntimeRef.current.sph = sph;
-      vp.softGroup.add(sph.createMesh(cfg.sphFluid, cfg.colormap));
-    } else {
-      const wave = new WaveTankSolver(56, 7.2);
-      softRuntimeRef.current.wave = wave;
-      vp.softGroup.add(wave.createMesh(cfg.colormap));
-    }
-  }, []);
+      refreshStats(modeRef.current);
+    },
+    [refreshStats]
+  );
 
   // Initialize Viewport & Main Render/Simulation Loop
   useEffect(() => {
@@ -368,9 +390,7 @@ export const App: React.FC = () => {
       onTransformObject: (id, kind, pos, rot, scale) => {
         if (kind === 'physics') {
           setEntities((prev) =>
-            prev.map((e) =>
-              e.id === id ? { ...e, position: pos, rotation: rot, scale } : e
-            )
+            prev.map((e) => (e.id === id ? { ...e, position: pos, rotation: rot, scale } : e))
           );
           if (!runningRef.current) {
             rapierRef.current.setKinematicTarget(id, pos, rot);
@@ -388,15 +408,13 @@ export const App: React.FC = () => {
     viewportRef.current = vp;
     vp.setModeVisibility(modeRef.current);
     vp.setSelectedId(selectedIdRef.current);
+    vp.setStageSettings(stage);
 
-    void syncPhysicsWorldAndViewport(
-      entitiesRef.current,
-      jointsRef.current,
-      gravityRef.current
-    );
+    void syncPhysicsWorldAndViewport(entitiesRef.current, jointsRef.current, gravityRef.current);
     vp.syncCadParts(cadParts);
     rebuildMathViewport(mathConfigRef.current);
     rebuildSoftViewport(softConfigRef.current);
+    refreshStats(modeRef.current);
 
     let rafId = 0;
     let lastTs = performance.now();
@@ -424,10 +442,9 @@ export const App: React.FC = () => {
 
       if (isRunning && playbackIndexRef.current === null) {
         if (activeMode === 'physics' || activeMode === 'experiments') {
-          const stepDt = (1 / 60) * timeScaleRef.current;
+          const stepDt = (1 / 60) * Math.min(5, timeScaleRef.current);
           const engine = rapierRef.current;
           if (engine.isReady) {
-            // Invoke experiment script step hook if active
             if (scriptStepCallbackRef.current) {
               const stepApi: StepRuntimeApi = {
                 getState: (eid) => {
@@ -458,7 +475,7 @@ export const App: React.FC = () => {
               try {
                 scriptStepCallbackRef.current(engine.time, stepApi);
               } catch {
-                // Keep simulation stable even if user callback throws mid-run
+                // Keep loop resilient
               }
             }
 
@@ -572,13 +589,14 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Sync mode visibility & overlays
+  // Sync mode visibility & stage settings
   useEffect(() => {
     const vp = viewportRef.current;
     if (!vp) return;
     vp.setModeVisibility(mode);
-    vp.setOverlays(overlays);
-  }, [mode, overlays]);
+    vp.setStageSettings(stage);
+    refreshStats(mode);
+  }, [mode, stage, refreshStats]);
 
   useEffect(() => {
     viewportRef.current?.setGizmoMode(gizmoMode);
@@ -594,7 +612,8 @@ export const App: React.FC = () => {
       return;
     }
     viewportRef.current?.syncCadParts(cadParts);
-  }, [cadParts]);
+    if (modeRef.current === 'cad') refreshStats('cad');
+  }, [cadParts, refreshStats]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -618,7 +637,6 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  // Mode change auto-runs soft & wave visualizers cleanly
   const handleModeChange = (nextMode: StudioMode) => {
     setMode(nextMode);
     if (nextMode === 'cad') {
@@ -652,7 +670,7 @@ export const App: React.FC = () => {
 
   const handleAddPhysicsEntity = (shape: ShapeKind) => {
     const idx = entities.length + 1;
-    const colors = ['#22d3ee', '#f59e0b', '#34d399', '#a78bfa', '#fb7185'];
+    const colors = ['#38bdf8', '#f59e0b', '#34d399', '#a78bfa', '#fb7185'];
     const ent: StudioEntity = {
       id: `body-${shape}-${Date.now()}`,
       name: `${shape.charAt(0).toUpperCase() + shape.slice(1)} ${idx}`,
@@ -804,7 +822,6 @@ export const App: React.FC = () => {
       return;
     }
 
-    // Center resulting geometry around its bounding box center so gizmo stays intuitive
     resultGeom.computeBoundingBox();
     const center = new THREE.Vector3();
     resultGeom.boundingBox?.getCenter(center);
@@ -816,16 +833,14 @@ export const App: React.FC = () => {
       name: `${pA.name} ${op} ${pB.name}`,
       position: [center.x, center.y, center.z],
       rotation: [0, 0, 0],
-      color: '#22d3ee',
+      color: '#38bdf8',
       visible: true,
       csgMesh: serializeBufferGeometry(resultGeom),
     };
     resultGeom.dispose();
 
     setCadParts((prev) => [
-      ...prev.map((p) =>
-        p.id === idA || p.id === idB ? { ...p, visible: false } : p
-      ),
+      ...prev.map((p) => (p.id === idA || p.id === idB ? { ...p, visible: false } : p)),
       csgPart,
     ]);
     setSelectedId(csgPart.id);
@@ -930,7 +945,7 @@ export const App: React.FC = () => {
       rotation: [0, 0, 0],
       scale: [1, 1, 1],
       size: { width: 1, height: 1, depth: 1, radius: 0.5 },
-      color: '#22d3ee',
+      color: '#38bdf8',
       metalness: 0.35,
       roughness: 0.3,
       opacity: 1,
@@ -975,24 +990,47 @@ export const App: React.FC = () => {
   const handleUpdateSoftConfig = (next: SoftSimConfig) => {
     const prev = softConfig;
     setSoftConfig(next);
-    if (
-      next.activeKind === 'particles' &&
-      next.particles.count !== prev.particles.count
-    ) {
+    if (next.activeKind === 'particles' && next.particles.count !== prev.particles.count) {
       rebuildSoftViewport(next);
       return;
     }
-    if (
-      next.activeKind === 'cloth' &&
-      next.cloth.pinMode !== prev.cloth.pinMode
-    ) {
+    if (next.activeKind === 'cloth' && next.cloth.pinMode !== prev.cloth.pinMode) {
       softRuntimeRef.current.cloth?.setPinMode(next.cloth.pinMode);
     }
-    // Sync immediate visual updates (e.g. colormap, obstacle) even while paused
     softRuntimeRef.current.particles?.syncMesh(next.colormap);
     softRuntimeRef.current.cloth?.syncMesh(next.cloth, next.colormap);
     softRuntimeRef.current.sph?.syncMesh(next.colormap);
     softRuntimeRef.current.wave?.syncMesh(next.colormap);
+  };
+
+  // Preset Cycler (< and > arrows in viewport)
+  const handleCyclePreset = (dir: -1 | 1) => {
+    if (mode === 'physics') {
+      const idx = physicsPresets.findIndex((p) => p.id === activePhysicsPresetId);
+      const nextIdx = (idx + dir + physicsPresets.length) % physicsPresets.length;
+      handleLoadPhysicsPreset(physicsPresets[nextIdx].id);
+    } else if (mode === 'math') {
+      const k = mathConfig.activeKind;
+      const list =
+        k === 'parametric'
+          ? PARAMETRIC_PRESETS
+          : k === 'explicit'
+          ? EXPLICIT_PRESETS
+          : k === 'implicit'
+          ? IMPLICIT_PRESETS
+          : k === 'ode'
+          ? ODE_PRESETS
+          : VECTOR_FIELD_PRESETS;
+      const currId = mathConfig[k].presetId;
+      const idx = list.findIndex((p) => p.id === currId);
+      const nextIdx = (idx + dir + list.length) % list.length;
+      handleSelectMathPreset(k, list[nextIdx].id);
+    } else if (mode === 'soft') {
+      const kinds: SoftSimKind[] = ['particles', 'cloth', 'sphFluid', 'waveTank'];
+      const idx = kinds.indexOf(softConfig.activeKind);
+      const nextIdx = (idx + dir + kinds.length) % kinds.length;
+      handleSoftKindChange(kinds[nextIdx]);
+    }
   };
 
   // Experiments actions
@@ -1020,6 +1058,7 @@ export const App: React.FC = () => {
         setSweepProgress({ running: true, completed, total });
       });
       setSweepResults(results);
+      setTelemetryOpen(true);
     } finally {
       setSweepProgress((p) => ({ ...p, running: false }));
     }
@@ -1091,7 +1130,6 @@ export const App: React.FC = () => {
     rapierRef.current.setGravity(g);
   };
 
-  // Save / Load / Export
   const handleSaveScene = () => {
     const file: OuterflowSceneFile = {
       format: 'outerflow-scene',
@@ -1126,6 +1164,17 @@ export const App: React.FC = () => {
     rebuildSoftViewport(parsed.softConfig);
   };
 
+  const zenMode = leftCollapsed && rightCollapsed;
+  const handleToggleZenMode = () => {
+    if (zenMode) {
+      setLeftCollapsed(false);
+      setRightCollapsed(false);
+    } else {
+      setLeftCollapsed(true);
+      setRightCollapsed(true);
+    }
+  };
+
   const selectedEntity = useMemo(
     () => entities.find((e) => e.id === selectedId) ?? null,
     [entities, selectedId]
@@ -1134,22 +1183,20 @@ export const App: React.FC = () => {
     () => cadParts.find((p) => p.id === selectedId) ?? null,
     [cadParts, selectedId]
   );
-
-  const statusText = useMemo(() => {
-    if (mode === 'physics') return `Bodies: ${entities.length} · Joints: ${joints.length}`;
-    if (mode === 'cad') return `CAD Parts: ${cadParts.length}`;
-    if (mode === 'math') return `Math: ${mathConfig.activeKind}`;
-    if (mode === 'soft') return `Solver: ${softConfig.activeKind}`;
-    return 'Experiment Lab';
-  }, [mode, entities.length, joints.length, cadParts.length, mathConfig.activeKind, softConfig.activeKind]);
+  const latestTelemetry = telemetrySamples[telemetrySamples.length - 1];
 
   return (
     <div className="studio-shell">
       <TopBar
         mode={mode}
         onModeChange={handleModeChange}
-        overlays={overlays}
-        onOverlaysChange={setOverlays}
+        stage={stage}
+        onStageChange={setStage}
+        telemetryOpen={telemetryOpen}
+        onToggleTelemetry={() => setTelemetryOpen((o) => !o)}
+        zenMode={zenMode}
+        onToggleZenMode={handleToggleZenMode}
+        onResetSim={handleReset}
         onSaveScene={handleSaveScene}
         onLoadScene={handleLoadScene}
         onExportGLB={() => {
@@ -1171,65 +1218,113 @@ export const App: React.FC = () => {
       />
 
       <div className="workspace-body">
-        <LeftPanel
-          mode={mode}
-          physicsPresets={physicsPresets}
-          activePhysicsPresetId={activePhysicsPresetId}
-          onLoadPhysicsPreset={handleLoadPhysicsPreset}
-          entities={entities}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-          onAddPhysicsEntity={handleAddPhysicsEntity}
-          onToggleEntityVisible={handleToggleEntityVisible}
-          onDuplicateEntity={handleDuplicateEntity}
-          onDeleteEntity={handleDeleteEntity}
-          cadParts={cadParts}
-          onAddCadPart={handleAddCadPart}
-          onToggleCadVisible={handleToggleCadVisible}
-          onDeleteCadPart={handleDeleteCadPart}
-          mathConfig={mathConfig}
-          onMathKindChange={handleMathKindChange}
-          onSelectMathPreset={handleSelectMathPreset}
-          softConfig={softConfig}
-          onSoftKindChange={handleSoftKindChange}
-          onSoftParticlePreset={handleSoftParticlePreset}
-        />
+        {!leftCollapsed && (
+          <LeftPanel
+            mode={mode}
+            onCollapse={() => setLeftCollapsed(true)}
+            stage={stage}
+            onStageChange={setStage}
+            onResetStage={() => setStage(createDefaultStageSettings())}
+            physicsPresets={physicsPresets}
+            activePhysicsPresetId={activePhysicsPresetId}
+            onLoadPhysicsPreset={handleLoadPhysicsPreset}
+            entities={entities}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            onAddPhysicsEntity={handleAddPhysicsEntity}
+            onToggleEntityVisible={handleToggleEntityVisible}
+            onDuplicateEntity={handleDuplicateEntity}
+            onDeleteEntity={handleDeleteEntity}
+            cadParts={cadParts}
+            onAddCadPart={handleAddCadPart}
+            onToggleCadVisible={handleToggleCadVisible}
+            onDeleteCadPart={handleDeleteCadPart}
+            mathConfig={mathConfig}
+            onMathKindChange={handleMathKindChange}
+            onSelectMathPreset={handleSelectMathPreset}
+            softConfig={softConfig}
+            onSoftKindChange={handleSoftKindChange}
+            onSoftParticlePreset={handleSoftParticlePreset}
+          />
+        )}
 
         <main className="center-column">
           <div className="viewport-wrap">
             <div ref={viewportHostRef} className="viewport-canvas-host" />
+
+            {leftCollapsed && (
+              <button
+                type="button"
+                className="panel-reopen-btn left"
+                style={{ top: 82 }}
+                onClick={() => setLeftCollapsed(false)}
+                title="Expand Left Studio Panel"
+              >
+                <ChevronsRight size={14} />
+              </button>
+            )}
+
+            {rightCollapsed && (
+              <button
+                type="button"
+                className="panel-reopen-btn right"
+                onClick={() => setRightCollapsed(false)}
+                title="Expand Info Inspector"
+              >
+                <ChevronsLeft size={14} />
+              </button>
+            )}
+
             <ViewportHUD
               mode={mode}
               fps={fps}
               simTime={simTime}
-              statusText={statusText}
+              running={running}
+              entitiesCount={entities.length}
+              cadCount={cadParts.filter((c) => c.visible).length}
+              meshStats={mode === 'math' ? mathStats : meshStats}
+              latestTelemetry={latestTelemetry}
               gizmoMode={gizmoMode}
               onGizmoChange={setGizmoMode}
               onCameraPreset={(p: CameraPreset) => viewportRef.current?.setCameraPreset(p)}
               onFocusSelected={() => viewportRef.current?.focusSelected()}
+              onCyclePreset={handleCyclePreset}
+              telemetryOpen={telemetryOpen}
+              onToggleTelemetry={() => setTelemetryOpen((o) => !o)}
+              zenMode={zenMode}
+              onToggleZenMode={handleToggleZenMode}
+            />
+
+            <TransportBar
+              simTime={simTime}
+              running={running}
+              onToggleRun={() => {
+                setPlaybackIndex(null);
+                setRunning((r) => {
+                  const next = !r;
+                  if (next && stage.explodedView) {
+                    setStage((s) => ({ ...s, explodedView: false }));
+                  }
+                  return next;
+                });
+              }}
+              onStep={handleStep}
+              onReset={handleReset}
+              timeScale={timeScale}
+              onTimeScaleChange={setTimeScale}
+              gravity={gravity}
+              onGravityChange={handleGravityChange}
+              recording={recording}
+              onToggleRecord={() => setRecording((r) => !r)}
+              recordedFramesCount={recordedFrames.length}
+              playbackIndex={playbackIndex}
+              onScrubFrame={handleScrubFrame}
             />
           </div>
 
-          <TransportBar
-            running={running}
-            onToggleRun={() => {
-              setPlaybackIndex(null);
-              setRunning((r) => !r);
-            }}
-            onStep={handleStep}
-            onReset={handleReset}
-            timeScale={timeScale}
-            onTimeScaleChange={setTimeScale}
-            gravity={gravity}
-            onGravityChange={handleGravityChange}
-            recording={recording}
-            onToggleRecord={() => setRecording((r) => !r)}
-            recordedFramesCount={recordedFrames.length}
-            playbackIndex={playbackIndex}
-            onScrubFrame={handleScrubFrame}
-          />
-
           <TelemetryDrawer
+            open={telemetryOpen}
+            onClose={() => setTelemetryOpen(false)}
             samples={telemetrySamples}
             sweepResults={sweepResults}
             onClearTelemetry={() => setTelemetrySamples([])}
@@ -1238,51 +1333,59 @@ export const App: React.FC = () => {
           />
         </main>
 
-        <RightPanel
-          mode={mode}
-          entities={entities}
-          joints={joints}
-          selectedEntity={selectedEntity}
-          onUpdateEntity={handleUpdateEntity}
-          onApplyImpulse={(id, imp) => rapierRef.current.applyImpulse(id, imp)}
-          onUpdateJointMotor={(id, speed, maxForce) => {
-            setJoints((prev) =>
-              prev.map((j) => (j.id === id ? { ...j, motorSpeed: speed, motorMaxForce: maxForce } : j))
-            );
-            rapierRef.current.updateJointMotor(id, speed, maxForce);
-          }}
-          onAddJoint={handleAddJoint}
-          onDeleteJoint={handleDeleteJoint}
-          cadParts={cadParts}
-          selectedCadPart={selectedCadPart}
-          onUpdateCadPart={handleUpdateCadPart}
-          onRunCsg={handleRunCsg}
-          onSendCadToPhysics={handleSendCadToPhysics}
-          mathConfig={mathConfig}
-          mathErrors={mathErrors}
-          mathStats={mathStats}
-          onUpdateMathConfig={handleUpdateMathConfig}
-          onSendMathToPhysics={handleSendMathToPhysics}
-          softConfig={softConfig}
-          onUpdateSoftConfig={handleUpdateSoftConfig}
-          onTriggerFluidSlosh={() => softRuntimeRef.current.sph?.sloshImpulse()}
-          onTriggerWaveDrop={() =>
-            softRuntimeRef.current.wave?.dropRipple(
-              (Math.random() - 0.5) * 0.8,
-              (Math.random() - 0.5) * 0.8,
-              0.9
-            )
-          }
-          experimentScript={experimentScript}
-          onExperimentScriptChange={setExperimentScript}
-          onRunExperimentScript={handleRunExperimentScript}
-          scriptLogs={scriptLogs}
-          scriptError={scriptError}
-          sweepConfig={sweepConfig}
-          onSweepConfigChange={setSweepConfig}
-          onRunSweep={handleRunSweep}
-          sweepProgress={sweepProgress}
-        />
+        {!rightCollapsed && (
+          <RightPanel
+            mode={mode}
+            onCollapse={() => setRightCollapsed(true)}
+            running={running}
+            gravity={gravity}
+            meshStats={meshStats}
+            entities={entities}
+            joints={joints}
+            selectedEntity={selectedEntity}
+            onUpdateEntity={handleUpdateEntity}
+            onApplyImpulse={(id, imp) => rapierRef.current.applyImpulse(id, imp)}
+            onUpdateJointMotor={(id, speed, maxForce) => {
+              setJoints((prev) =>
+                prev.map((j) =>
+                  j.id === id ? { ...j, motorSpeed: speed, motorMaxForce: maxForce } : j
+                )
+              );
+              rapierRef.current.updateJointMotor(id, speed, maxForce);
+            }}
+            onAddJoint={handleAddJoint}
+            onDeleteJoint={handleDeleteJoint}
+            cadParts={cadParts}
+            selectedCadPart={selectedCadPart}
+            onUpdateCadPart={handleUpdateCadPart}
+            onRunCsg={handleRunCsg}
+            onSendCadToPhysics={handleSendCadToPhysics}
+            mathConfig={mathConfig}
+            mathErrors={mathErrors}
+            mathStats={mathStats}
+            onUpdateMathConfig={handleUpdateMathConfig}
+            onSendMathToPhysics={handleSendMathToPhysics}
+            softConfig={softConfig}
+            onUpdateSoftConfig={handleUpdateSoftConfig}
+            onTriggerFluidSlosh={() => softRuntimeRef.current.sph?.sloshImpulse()}
+            onTriggerWaveDrop={() =>
+              softRuntimeRef.current.wave?.dropRipple(
+                (Math.random() - 0.5) * 0.8,
+                (Math.random() - 0.5) * 0.8,
+                0.9
+              )
+            }
+            experimentScript={experimentScript}
+            onExperimentScriptChange={setExperimentScript}
+            onRunExperimentScript={handleRunExperimentScript}
+            scriptLogs={scriptLogs}
+            scriptError={scriptError}
+            sweepConfig={sweepConfig}
+            onSweepConfigChange={setSweepConfig}
+            onRunSweep={handleRunSweep}
+            sweepProgress={sweepProgress}
+          />
+        )}
       </div>
     </div>
   );

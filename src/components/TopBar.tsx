@@ -1,25 +1,31 @@
 import React, { useRef, useState } from 'react';
 import {
+  Activity,
   Atom,
   Box,
   Cpu,
   Download,
-  Eye,
   FlaskConical,
   Grid3x3,
-  Layers,
+  Maximize2,
+  Minimize2,
+  RotateCcw,
   Sigma,
-  Sun,
   Upload,
   Waves,
 } from 'lucide-react';
-import type { LightingPreset, StudioMode, ViewportOverlays } from '../types/studio';
+import type { StageSettings, StudioMode } from '../types/studio';
 
 interface TopBarProps {
   mode: StudioMode;
   onModeChange: (m: StudioMode) => void;
-  overlays: ViewportOverlays;
-  onOverlaysChange: (next: ViewportOverlays) => void;
+  stage: StageSettings;
+  onStageChange: (next: StageSettings) => void;
+  telemetryOpen: boolean;
+  onToggleTelemetry: () => void;
+  zenMode: boolean;
+  onToggleZenMode: () => void;
+  onResetSim: () => void;
   onSaveScene: () => void;
   onLoadScene: (file: File) => void;
   onExportGLB: () => void;
@@ -29,18 +35,23 @@ interface TopBarProps {
 }
 
 const MODES: { id: StudioMode; label: string; icon: React.ReactNode }[] = [
-  { id: 'physics', label: 'Physics', icon: <Atom size={14} /> },
-  { id: 'cad', label: 'CAD & CSG', icon: <Box size={14} /> },
-  { id: 'math', label: 'Mathematics', icon: <Sigma size={14} /> },
-  { id: 'soft', label: 'Fields & Soft', icon: <Waves size={14} /> },
-  { id: 'experiments', label: 'Experiments', icon: <FlaskConical size={14} /> },
+  { id: 'physics', label: 'Physics', icon: <Atom size={13} /> },
+  { id: 'cad', label: 'CAD & CSG', icon: <Box size={13} /> },
+  { id: 'math', label: 'Math', icon: <Sigma size={13} /> },
+  { id: 'soft', label: 'Soft & Fluid', icon: <Waves size={13} /> },
+  { id: 'experiments', label: 'Experiments', icon: <FlaskConical size={13} /> },
 ];
 
 export const TopBar: React.FC<TopBarProps> = ({
   mode,
   onModeChange,
-  overlays,
-  onOverlaysChange,
+  stage,
+  onStageChange,
+  telemetryOpen,
+  onToggleTelemetry,
+  zenMode,
+  onToggleZenMode,
+  onResetSim,
   onSaveScene,
   onLoadScene,
   onExportGLB,
@@ -51,84 +62,70 @@ export const TopBar: React.FC<TopBarProps> = ({
   const [exportOpen, setExportOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const toggleOverlay = (key: 'showGrid' | 'showAxes' | 'showWireframe' | 'showColliders') => {
-    onOverlaysChange({ ...overlays, [key]: !overlays[key] });
-  };
-
   return (
     <header className="topbar">
-      <div className="brand">
-        <div className="brand-mark">
-          <Cpu size={15} />
-        </div>
-        <div className="brand-title">
+      <div className="topbar-left">
+        <div className="brand-chip">
+          <div className="brand-mark">
+            <Cpu size={14} />
+          </div>
           <span className="brand-name">OUTERFLOW</span>
-          <span className="brand-sub">Harboria Labs · 3D Studio</span>
+          <span className="brand-sub">Harboria Labs</span>
         </div>
-      </div>
 
-      <nav className="mode-tabs" aria-label="Studio Modes">
-        {MODES.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            className={`mode-tab ${mode === m.id ? 'active' : ''}`}
-            onClick={() => onModeChange(m.id)}
-          >
-            {m.icon}
-            <span>{m.label}</span>
-          </button>
-        ))}
-      </nav>
+        <nav className="mode-pills" aria-label="Studio Modes">
+          {MODES.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              className={`mode-pill ${mode === m.id ? 'active' : ''}`}
+              onClick={() => onModeChange(m.id)}
+            >
+              {m.icon}
+              <span>{m.label}</span>
+            </button>
+          ))}
+        </nav>
+      </div>
 
       <div className="topbar-actions">
         <button
           type="button"
-          className={`icon-btn ${overlays.showGrid ? 'active' : ''}`}
-          onClick={() => toggleOverlay('showGrid')}
-          title="Toggle Floor Grid"
+          className="top-btn"
+          onClick={onResetSim}
+          title="Reset Active Simulation"
+        >
+          <RotateCcw size={13} />
+          <span>Reset</span>
+        </button>
+
+        <button
+          type="button"
+          className={`top-btn ${stage.showGrid ? 'active' : ''}`}
+          onClick={() => onStageChange({ ...stage, showGrid: !stage.showGrid })}
+          title="Toggle Studio Floor Grid"
         >
           <Grid3x3 size={13} />
-          <span>Grid</span>
         </button>
 
         <button
           type="button"
-          className={`icon-btn ${overlays.showWireframe ? 'active' : ''}`}
-          onClick={() => toggleOverlay('showWireframe')}
-          title="Toggle Wireframe Shading"
+          className={`top-btn ${telemetryOpen ? 'active' : ''}`}
+          onClick={onToggleTelemetry}
+          title="Toggle Telemetry & Sweep Drawer"
         >
-          <Layers size={13} />
-          <span>Wire</span>
+          <Activity size={13} />
+          <span>Telemetry</span>
         </button>
 
         <button
           type="button"
-          className={`icon-btn ${overlays.showColliders ? 'active' : ''}`}
-          onClick={() => toggleOverlay('showColliders')}
-          title="Toggle Physics Collider Outlines"
+          className={`top-btn ${zenMode ? 'active' : ''}`}
+          onClick={onToggleZenMode}
+          title="Toggle Full-Bleed Viewport (Hide Sidebars)"
         >
-          <Eye size={13} />
-          <span>Colliders</span>
+          {zenMode ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
         </button>
-
-        <div className="icon-btn" style={{ padding: '0 6px' }} title="Studio Lighting Preset">
-          <Sun size={13} />
-          <select
-            aria-label="Lighting Preset"
-            className="input-select"
-            style={{ border: 'none', background: 'transparent', padding: 0, width: 'auto' }}
-            value={overlays.lighting}
-            onChange={(e) =>
-              onOverlaysChange({ ...overlays, lighting: e.target.value as LightingPreset })
-            }
-          >
-            <option value="studio">Studio</option>
-            <option value="blueprint">Blueprint</option>
-            <option value="lab">Bright Lab</option>
-            <option value="aerospace">Aerospace</option>
-          </select>
-        </div>
 
         <input
           ref={fileInputRef}
@@ -144,9 +141,9 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         <button
           type="button"
-          className="icon-btn"
+          className="top-btn"
           onClick={() => fileInputRef.current?.click()}
-          title="Open .outerflow.json scene"
+          title="Load .outerflow.json scene"
         >
           <Upload size={13} />
           <span>Load</span>
@@ -154,9 +151,9 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         <button
           type="button"
-          className="icon-btn primary"
+          className="top-btn primary"
           onClick={() => setExportOpen((o) => !o)}
-          title="Save & Export Scene or 3D Geometry"
+          title="Save & Export Scene or 3D Mesh"
         >
           <Download size={13} />
           <span>Export</span>
@@ -216,7 +213,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 setExportOpen(false);
               }}
             >
-              <span>Capture Viewport PNG</span>
+              <span>Capture Snapshot PNG</span>
               <span className="hierarchy-tag">.png</span>
             </button>
           </div>

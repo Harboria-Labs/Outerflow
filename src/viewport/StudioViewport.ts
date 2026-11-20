@@ -1,15 +1,16 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { Reflector } from 'three/examples/jsm/objects/Reflector.js';
 import type {
   CadPartConfig,
   CameraPreset,
   GizmoMode,
-  LightingPreset,
+  StageSettings,
   StudioEntity,
   StudioMode,
   Vec3,
-  ViewportOverlays,
 } from '../types/studio';
 import { createParametricGeometry, deserializeMeshData } from '../engines/cad/parametricGenerators';
 import type { JointVisualSegment } from '../engines/physics/rapierEngine';
@@ -23,6 +24,25 @@ export interface ViewportCallbacks {
     rotation: Vec3,
     scale: Vec3
   ) => void;
+}
+
+export function createDefaultStageSettings(): StageSettings {
+  return {
+    theme: 'dark',
+    intensity: 1.0,
+    reflection: 0.55,
+    shadows: true,
+    showFloor: true,
+    exposure: 1.08,
+    rimLight: 0.8,
+    shading: 'original',
+    wireframe: false,
+    showColliders: false,
+    showGrid: true,
+    showAxes: false,
+    explodedView: false,
+    autoSpin: false,
+  };
 }
 
 export class StudioViewport {
@@ -40,19 +60,24 @@ export class StudioViewport {
   readonly mathGroup = new THREE.Group();
   readonly softGroup = new THREE.Group();
 
+  private envRenderTarget: THREE.WebGLRenderTarget;
   private gridHelper: THREE.GridHelper;
   private axesHelper: THREE.AxesHelper;
   private floorMesh: THREE.Mesh;
+  private reflector: Reflector;
   private hemiLight: THREE.HemisphereLight;
   private keyLight: THREE.DirectionalLight;
   private rimLight: THREE.DirectionalLight;
+
+  private solidMaterial: THREE.MeshStandardMaterial;
+  private normalMaterial: THREE.MeshNormalMaterial;
 
   private entityMeshes = new Map<string, THREE.Mesh>();
   private cadMeshes = new Map<string, THREE.Mesh>();
   private selectedId: string | null = null;
   private gizmoMode: GizmoMode = 'translate';
   private activeMode: StudioMode = 'physics';
-  private wireframeEnabled = false;
+  private stage: StageSettings = createDefaultStageSettings();
   private callbacks: ViewportCallbacks;
   private resizeObserver: ResizeObserver;
   private pointerDownPos = { x: 0, y: 0 };
@@ -65,14 +90,14 @@ export class StudioViewport {
     this.callbacks = callbacks;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color('#0a0f18');
-    this.scene.fog = new THREE.Fog('#0a0f18', 28, 75);
+    this.scene.background = new THREE.Color('#000000');
+    this.scene.fog = new THREE.Fog('#000000', 18, 62);
 
     const w = Math.max(1, container.clientWidth);
     const h = Math.max(1, container.clientHeight);
 
-    this.camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 200);
-    this.camera.position.set(8.5, 6.2, 10.5);
+    this.camera = new THREE.PerspectiveCamera(44, w / h, 0.1, 200);
+    this.camera.position.set(8.2, 5.4, 9.8);
 
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
@@ -85,6 +110,25 @@ export class StudioViewport {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.08;
     container.appendChild(this.renderer.domElement);
+
+    // RoomEnvironment IBL for realistic metallic/rough studio shading
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    const roomEnv = new RoomEnvironment();
+    this.envRenderTarget = pmrem.fromScene(roomEnv, 0.04);
+    this.scene.environment = this.envRenderTarget.texture;
+    this.scene.environmentIntensity = 0.85;
+    roomEnv.dispose();
+    pmrem.dispose();
+
+    this.solidMaterial = new THREE.MeshStandardMaterial({
+      color: '#c7ccd4',
+      roughness: 0.62,
+      metalness: 0.05,
+      side: THREE.DoubleSide,
+    });
+    this.normalMaterial = new THREE.MeshNormalMaterial({
+      side: THREE.DoubleSide,
+    });
 
     this.orbit = new OrbitControls(this.camera, this.renderer.domElement);
     this.orbit.enableDamping = true;
@@ -108,6 +152,7 @@ export class StudioViewport {
       const id = obj.userData.id as string | undefined;
       const kind = obj.userData.kind as 'physics' | 'cad' | undefined;
       if (!id || !kind) return;
+      obj.userData.basePos = [obj.position.x, obj.position.y, obj.position.z];
       this.callbacks.onTransformObject?.(
         id,
         kind,
@@ -117,12 +162,12 @@ export class StudioViewport {
       );
     });
 
-    // Studio lighting
-    this.hemiLight = new THREE.HemisphereLight('#b8d4ff', '#1e293b', 0.65);
+    // Studio lighting rig
+    this.hemiLight = new THREE.HemisphereLight('#e2e8f0', '#18181b', 0.45);
     this.scene.add(this.hemiLight);
 
-    this.keyLight = new THREE.DirectionalLight('#ffffff', 1.8);
-    this.keyLight.position.set(10, 16, 11);
+    this.keyLight = new THREE.DirectionalLight('#ffffff', 1.65);
+    this.keyLight.position.set(9, 15, 10);
     this.keyLight.castShadow = true;
     this.keyLight.shadow.mapSize.set(2048, 2048);
     this.keyLight.shadow.camera.near = 1;
@@ -135,30 +180,58 @@ export class StudioViewport {
     this.keyLight.shadow.bias = -0.0005;
     this.scene.add(this.keyLight);
 
-    this.rimLight = new THREE.DirectionalLight('#38bdf8', 0.65);
+    this.rimLight = new THREE.DirectionalLight('#cbd5e1', 0.8);
     this.rimLight.position.set(-10, 7, -9);
     this.scene.add(this.rimLight);
 
-    // Ground + grid + axes
+    // Glossy Reflective Studio Floor
+    const reflectorGeom = new THREE.PlaneGeometry(70, 70);
+    this.reflector = new Reflector(reflectorGeom, {
+      textureWidth: 1024,
+      textureHeight: 1024,
+      color: 0x626670,
+      clipBias: 0.003,
+      multisample: 0,
+    });
+    this.reflector.rotation.x = -Math.PI / 2;
+    this.reflector.position.y = -0.008;
+    this.scene.add(this.reflector);
+
     const floorGeom = new THREE.PlaneGeometry(160, 160);
     const floorMat = new THREE.MeshStandardMaterial({
-      color: '#0e1522',
-      roughness: 0.92,
-      metalness: 0.05,
+      color: '#1b1d22',
+      roughness: 0.45,
+      metalness: 0.1,
+      transparent: true,
+      opacity: 0.62,
     });
     this.floorMesh = new THREE.Mesh(floorGeom, floorMat);
     this.floorMesh.rotation.x = -Math.PI / 2;
-    this.floorMesh.position.y = -0.005;
+    this.floorMesh.position.y = -0.002;
     this.floorMesh.receiveShadow = true;
     this.scene.add(this.floorMesh);
 
-    this.gridHelper = new THREE.GridHelper(40, 40, '#22d3ee', '#1e293b');
+    this.gridHelper = new THREE.GridHelper(36, 36, '#3f3f46', '#27272a');
     (this.gridHelper.material as THREE.Material).transparent = true;
-    (this.gridHelper.material as THREE.Material).opacity = 0.45;
+    (this.gridHelper.material as THREE.Material).opacity = 0.28;
+    this.gridHelper.position.y = 0.002;
     this.scene.add(this.gridHelper);
+
+    // Wrap Reflector onBeforeRender so floorMesh/gridHelper do not occlude mirror pass
+    const origReflectorRender = this.reflector.onBeforeRender;
+    this.reflector.onBeforeRender = (renderer, scene, camera, geometry, material, group) => {
+      const prevFloor = this.floorMesh.visible;
+      const prevGrid = this.gridHelper.visible;
+      this.floorMesh.visible = false;
+      this.gridHelper.visible = false;
+      origReflectorRender.call(this.reflector, renderer, scene, camera, geometry, material, group);
+      this.floorMesh.visible = prevFloor;
+      this.gridHelper.visible = prevGrid;
+    };
 
     this.axesHelper = new THREE.AxesHelper(2.2);
     this.axesHelper.position.set(0, 0.01, 0);
+    this.axesHelper.visible = false;
     this.scene.add(this.axesHelper);
 
     this.scene.add(this.physicsGroup);
@@ -168,11 +241,9 @@ export class StudioViewport {
     this.scene.add(this.mathGroup);
     this.scene.add(this.softGroup);
 
-    // Resize handling
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
 
-    // Selection pointer handlers
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown);
     this.renderer.domElement.addEventListener('pointerup', this.handlePointerUp);
   }
@@ -184,7 +255,7 @@ export class StudioViewport {
   private handlePointerUp = (e: PointerEvent) => {
     if (this.isDraggingGizmo) return;
     const dist = Math.hypot(e.clientX - this.pointerDownPos.x, e.clientY - this.pointerDownPos.y);
-    if (dist > 5) return; // Was an orbit drag
+    if (dist > 5) return;
 
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -221,11 +292,13 @@ export class StudioViewport {
     const showPhysics = mode === 'physics' || mode === 'experiments';
     this.physicsGroup.visible = showPhysics;
     this.jointDebugGroup.visible = showPhysics;
+    this.colliderDebugGroup.visible = showPhysics && this.stage.showColliders;
     this.cadGroup.visible = mode === 'cad';
     this.mathGroup.visible = mode === 'math';
     this.softGroup.visible = mode === 'soft';
 
     this.refreshGizmoAttachment();
+    this.applyStageToDomainGroups();
   }
 
   setSelectedId(id: string | null): void {
@@ -244,14 +317,18 @@ export class StudioViewport {
 
   private refreshSelectionHighlight(): void {
     for (const [id, mesh] of this.entityMeshes) {
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      mat.emissive.setHex(id === this.selectedId ? 0x164e63 : 0x000000);
-      mat.emissiveIntensity = id === this.selectedId ? 0.45 : 0;
+      const base = mesh.userData.baseMaterial as THREE.MeshStandardMaterial | undefined;
+      if (base && 'emissive' in base) {
+        base.emissive.setHex(id === this.selectedId ? 0x1d4ed8 : 0x000000);
+        base.emissiveIntensity = id === this.selectedId ? 0.32 : 0;
+      }
     }
     for (const [id, mesh] of this.cadMeshes) {
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      mat.emissive.setHex(id === this.selectedId ? 0x164e63 : 0x000000);
-      mat.emissiveIntensity = id === this.selectedId ? 0.45 : 0;
+      const base = mesh.userData.baseMaterial as THREE.MeshStandardMaterial | undefined;
+      if (base && 'emissive' in base) {
+        base.emissive.setHex(id === this.selectedId ? 0x1d4ed8 : 0x000000);
+        base.emissiveIntensity = id === this.selectedId ? 0.32 : 0;
+      }
     }
   }
 
@@ -273,81 +350,161 @@ export class StudioViewport {
     }
   }
 
-  setOverlays(overlays: ViewportOverlays): void {
-    this.gridHelper.visible = overlays.showGrid;
-    this.axesHelper.visible = overlays.showAxes;
+  setStageSettings(next: StageSettings): void {
+    const prevExploded = this.stage.explodedView;
+    this.stage = { ...next };
+
+    this.gridHelper.visible = next.showGrid;
+    this.axesHelper.visible = next.showAxes;
     this.colliderDebugGroup.visible =
-      overlays.showColliders && (this.activeMode === 'physics' || this.activeMode === 'experiments');
-    this.wireframeEnabled = overlays.showWireframe;
+      next.showColliders && (this.activeMode === 'physics' || this.activeMode === 'experiments');
 
-    for (const mesh of this.entityMeshes.values()) {
-      (mesh.material as THREE.MeshStandardMaterial).wireframe = overlays.showWireframe;
-    }
-    for (const mesh of this.cadMeshes.values()) {
-      (mesh.material as THREE.MeshStandardMaterial).wireframe = overlays.showWireframe;
-    }
-    this.mathGroup.traverse((obj) => {
-      if ((obj as THREE.Mesh).isMesh) {
-        const mat = (obj as THREE.Mesh).material as THREE.MeshStandardMaterial;
-        if (mat && 'wireframe' in mat) {
-          mat.wireframe = overlays.showWireframe;
-        }
-      }
-    });
+    // Theme & Glossy Studio Stage
+    const isLight = next.theme === 'light';
+    const bgHex = isLight ? '#e4e7ed' : '#000000';
+    this.scene.background = new THREE.Color(bgHex);
+    this.scene.fog = new THREE.Fog(bgHex, 20, 64);
 
-    this.applyLightingPreset(overlays.lighting);
+    const floorMat = this.floorMesh.material as THREE.MeshStandardMaterial;
+    floorMat.color.set(isLight ? '#d5d9e2' : '#181a1f');
+    floorMat.opacity = Math.max(0.16, 1 - next.reflection * 0.72);
+    this.floorMesh.visible = next.showFloor;
+    this.reflector.visible = next.showFloor && next.reflection > 0.02;
+
+    const reflMat = this.reflector.material as THREE.ShaderMaterial;
+    if (reflMat.uniforms?.color) {
+      reflMat.uniforms.color.value.set(isLight ? '#b8beca' : '#5e636e');
+    }
+
+    // Update grid colors subtly
+    const gridMat = this.gridHelper.material as THREE.Material;
+    gridMat.opacity = isLight ? 0.22 : 0.24;
+
+    // Lights & Exposure
+    this.renderer.toneMappingExposure = next.exposure;
+    this.renderer.shadowMap.enabled = next.shadows;
+    this.keyLight.castShadow = next.shadows;
+    this.keyLight.intensity = 1.65 * next.intensity;
+    this.hemiLight.intensity = (isLight ? 0.85 : 0.45) * next.intensity;
+    this.scene.environmentIntensity = 0.85 * next.intensity;
+    this.rimLight.intensity = next.rimLight;
+
+    // Orbit Auto-Spin
+    this.orbit.autoRotate = next.autoSpin;
+    this.orbit.autoRotateSpeed = 1.6;
+
+    this.applyStageToDomainGroups();
+
+    if (prevExploded !== next.explodedView) {
+      this.applyExplodedOffset(next.explodedView);
+    }
   }
 
-  private applyLightingPreset(preset: LightingPreset): void {
-    const floorMat = this.floorMesh.material as THREE.MeshStandardMaterial;
-    if (preset === 'studio') {
-      this.scene.background = new THREE.Color('#0a0f18');
-      this.scene.fog = new THREE.Fog('#0a0f18', 28, 75);
-      floorMat.color.set('#0e1522');
-      this.hemiLight.color.set('#b8d4ff');
-      this.hemiLight.intensity = 0.65;
-      this.keyLight.color.set('#ffffff');
-      this.keyLight.intensity = 1.8;
-      this.rimLight.color.set('#38bdf8');
-      this.rimLight.intensity = 0.65;
-    } else if (preset === 'blueprint') {
-      this.scene.background = new THREE.Color('#061a33');
-      this.scene.fog = new THREE.Fog('#061a33', 30, 75);
-      floorMat.color.set('#072142');
-      this.hemiLight.color.set('#7dd3fc');
-      this.hemiLight.intensity = 0.8;
-      this.keyLight.color.set('#e0f2fe');
-      this.keyLight.intensity = 1.5;
-      this.rimLight.color.set('#22d3ee');
-      this.rimLight.intensity = 0.85;
-    } else if (preset === 'lab') {
-      this.scene.background = new THREE.Color('#111317');
-      this.scene.fog = new THREE.Fog('#111317', 26, 70);
-      floorMat.color.set('#181c22');
-      this.hemiLight.color.set('#ffffff');
-      this.hemiLight.intensity = 0.9;
-      this.keyLight.color.set('#fffbeb');
-      this.keyLight.intensity = 2.0;
-      this.rimLight.color.set('#94a3b8');
-      this.rimLight.intensity = 0.45;
-    } else {
-      // aerospace
-      this.scene.background = new THREE.Color('#100c18');
-      this.scene.fog = new THREE.Fog('#100c18', 28, 75);
-      floorMat.color.set('#171224');
-      this.hemiLight.color.set('#fde68a');
-      this.hemiLight.intensity = 0.6;
-      this.keyLight.color.set('#ffedd5');
-      this.keyLight.intensity = 1.95;
-      this.rimLight.color.set('#818cf8');
-      this.rimLight.intensity = 0.85;
+  applyStageToDomainGroups(): void {
+    const groups = [this.physicsGroup, this.cadGroup, this.mathGroup];
+    this.solidMaterial.wireframe = this.stage.wireframe;
+    this.normalMaterial.wireframe = this.stage.wireframe;
+
+    for (const grp of groups) {
+      grp.traverse((obj) => {
+        if (!(obj as THREE.Mesh).isMesh) return;
+        const mesh = obj as THREE.Mesh;
+        if (!mesh.userData.baseMaterial) {
+          mesh.userData.baseMaterial = mesh.material;
+        }
+        const base = mesh.userData.baseMaterial as THREE.MeshStandardMaterial;
+
+        if (this.stage.shading === 'original') {
+          if ('wireframe' in base) base.wireframe = this.stage.wireframe;
+          mesh.material = base;
+        } else if (this.stage.shading === 'solid') {
+          mesh.material = this.solidMaterial;
+        } else if (this.stage.shading === 'normal') {
+          mesh.material = this.normalMaterial;
+        } else {
+          // albedo: unlit flat color preserving base color / vertexColors
+          let albedo = mesh.userData.albedoMaterial as THREE.MeshBasicMaterial | undefined;
+          if (!albedo) {
+            albedo = new THREE.MeshBasicMaterial({
+              color: base.color ? base.color.clone() : new THREE.Color('#ffffff'),
+              vertexColors: Boolean(base.vertexColors),
+              side: base.side,
+            });
+            mesh.userData.albedoMaterial = albedo;
+          } else if (base.color) {
+            albedo.color.copy(base.color);
+          }
+          albedo.wireframe = this.stage.wireframe;
+          mesh.material = albedo;
+        }
+      });
     }
+  }
+
+  private applyExplodedOffset(active: boolean): void {
+    const targetMeshes =
+      this.activeMode === 'cad'
+        ? Array.from(this.cadMeshes.values())
+        : Array.from(this.entityMeshes.values());
+    if (targetMeshes.length === 0) return;
+
+    const centroid = new THREE.Vector3();
+    let count = 0;
+    for (const m of targetMeshes) {
+      if (!m.visible) continue;
+      const base = (m.userData.basePos as Vec3 | undefined) ?? [
+        m.position.x,
+        m.position.y,
+        m.position.z,
+      ];
+      centroid.x += base[0];
+      centroid.y += base[1];
+      centroid.z += base[2];
+      count++;
+    }
+    if (count > 0) centroid.divideScalar(count);
+
+    for (const m of targetMeshes) {
+      const base = (m.userData.basePos as Vec3 | undefined) ?? [
+        m.position.x,
+        m.position.y,
+        m.position.z,
+      ];
+      if (!active) {
+        m.position.set(base[0], base[1], base[2]);
+      } else {
+        const dx = base[0] - centroid.x;
+        const dy = Math.max(0, base[1] - centroid.y);
+        const dz = base[2] - centroid.z;
+        m.position.set(base[0] + dx * 0.45, base[1] + dy * 0.45, base[2] + dz * 0.45);
+      }
+    }
+  }
+
+  getSceneMeshStats(mode: StudioMode): { vertices: number; triangles: number } {
+    const root = this.getExportTarget(mode);
+    let vertices = 0;
+    let triangles = 0;
+    root.traverse((obj) => {
+      if (!(obj as THREE.Mesh).isMesh || !obj.visible) return;
+      const m = obj as THREE.Mesh;
+      const geom = m.geometry;
+      if (!geom) return;
+      const pos = geom.getAttribute('position');
+      if (!pos) return;
+      const mult = (m as THREE.InstancedMesh).isInstancedMesh
+        ? (m as THREE.InstancedMesh).count
+        : 1;
+      vertices += pos.count * mult;
+      triangles += (geom.index ? geom.index.count / 3 : pos.count / 3) * mult;
+    });
+    return { vertices: Math.round(vertices), triangles: Math.round(triangles) };
   }
 
   setCameraPreset(preset: CameraPreset): void {
     const target = new THREE.Vector3(0, 1.4, 0);
     if (preset === 'persp') {
-      this.camera.position.set(8.5, 6.2, 10.5);
+      this.camera.position.set(8.2, 5.4, 9.8);
     } else if (preset === 'top') {
       this.camera.position.set(0.01, 14, 0.01);
     } else if (preset === 'front') {
@@ -355,7 +512,7 @@ export class StudioViewport {
     } else if (preset === 'right') {
       this.camera.position.set(13.5, 2.5, 0);
     } else {
-      this.camera.position.set(9.5, 8.5, 9.5);
+      this.camera.position.set(9.2, 8.2, 9.2);
     }
     this.orbit.target.copy(target);
     this.orbit.update();
@@ -379,7 +536,8 @@ export class StudioViewport {
     this.transform.detach();
     for (const mesh of this.entityMeshes.values()) {
       mesh.geometry.dispose();
-      (mesh.material as THREE.Material).dispose();
+      (mesh.userData.baseMaterial as THREE.Material | undefined)?.dispose();
+      (mesh.userData.albedoMaterial as THREE.Material | undefined)?.dispose();
     }
     this.entityMeshes.clear();
     this.physicsGroup.clear();
@@ -399,7 +557,7 @@ export class StudioViewport {
         roughness: ent.roughness,
         transparent: ent.opacity < 1,
         opacity: ent.opacity,
-        wireframe: this.wireframeEnabled,
+        wireframe: this.stage.wireframe,
       });
       const mesh = new THREE.Mesh(geom, mat);
       mesh.position.set(...ent.position);
@@ -408,14 +566,18 @@ export class StudioViewport {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.visible = ent.visible;
-      mesh.userData = { id: ent.id, kind: 'physics' };
+      mesh.userData = {
+        id: ent.id,
+        kind: 'physics',
+        baseMaterial: mat,
+        basePos: [...ent.position] as Vec3,
+      };
       this.physicsGroup.add(mesh);
       this.entityMeshes.set(ent.id, mesh);
 
-      // Build wireframe collider debug overlay
       const edges = new THREE.EdgesGeometry(geom);
       const lineMat = new THREE.LineBasicMaterial({
-        color: ent.bodyType === 'fixed' ? '#94a3b8' : '#22d3ee',
+        color: ent.bodyType === 'fixed' ? '#94a3b8' : '#2680eb',
         transparent: true,
         opacity: 0.75,
       });
@@ -430,6 +592,8 @@ export class StudioViewport {
 
     this.refreshSelectionHighlight();
     this.refreshGizmoAttachment();
+    this.applyStageToDomainGroups();
+    if (this.stage.explodedView) this.applyExplodedOffset(true);
   }
 
   private createEntityGeometry(ent: StudioEntity): THREE.BufferGeometry {
@@ -461,6 +625,7 @@ export class StudioViewport {
     if (mesh) {
       mesh.position.set(position[0], position[1], position[2]);
       mesh.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3]);
+      mesh.userData.basePos = [position[0], position[1], position[2]];
     }
     const wire = this.colliderDebugGroup.children.find((c) => c.userData.id === id);
     if (wire) {
@@ -478,16 +643,13 @@ export class StudioViewport {
     this.jointDebugGroup.clear();
 
     for (const seg of segments) {
-      const pts = [
-        new THREE.Vector3(...seg.start),
-        new THREE.Vector3(...seg.end),
-      ];
+      const pts = [new THREE.Vector3(...seg.start), new THREE.Vector3(...seg.end)];
       const geom = new THREE.BufferGeometry().setFromPoints(pts);
       const color =
         seg.kind === 'spring'
           ? '#f59e0b'
           : seg.kind === 'revolute'
-          ? '#22d3ee'
+          ? '#2680eb'
           : '#a78bfa';
       const mat = new THREE.LineBasicMaterial({ color });
       this.jointDebugGroup.add(new THREE.Line(geom, mat));
@@ -504,7 +666,8 @@ export class StudioViewport {
     this.transform.detach();
     for (const mesh of this.cadMeshes.values()) {
       mesh.geometry.dispose();
-      (mesh.material as THREE.Material).dispose();
+      (mesh.userData.baseMaterial as THREE.Material | undefined)?.dispose();
+      (mesh.userData.albedoMaterial as THREE.Material | undefined)?.dispose();
     }
     this.cadMeshes.clear();
     this.cadGroup.clear();
@@ -515,7 +678,7 @@ export class StudioViewport {
         color: part.color,
         metalness: 0.35,
         roughness: 0.32,
-        wireframe: this.wireframeEnabled,
+        wireframe: this.stage.wireframe,
       });
       const mesh = new THREE.Mesh(geom, mat);
       mesh.position.set(...part.position);
@@ -523,13 +686,20 @@ export class StudioViewport {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.visible = part.visible;
-      mesh.userData = { id: part.id, kind: 'cad' };
+      mesh.userData = {
+        id: part.id,
+        kind: 'cad',
+        baseMaterial: mat,
+        basePos: [...part.position] as Vec3,
+      };
       this.cadGroup.add(mesh);
       this.cadMeshes.set(part.id, mesh);
     }
 
     this.refreshSelectionHighlight();
     this.refreshGizmoAttachment();
+    this.applyStageToDomainGroups();
+    if (this.stage.explodedView) this.applyExplodedOffset(true);
   }
 
   getCadMesh(id: string): THREE.Mesh | undefined {
@@ -541,6 +711,7 @@ export class StudioViewport {
     if (!mesh) return;
     mesh.position.set(position[0], position[1], position[2]);
     mesh.rotation.set(rotation[0], rotation[1], rotation[2]);
+    mesh.userData.basePos = [...position] as Vec3;
   }
 
   getExportTarget(mode: StudioMode): THREE.Object3D {
@@ -561,6 +732,14 @@ export class StudioViewport {
     this.renderer.domElement.removeEventListener('pointerup', this.handlePointerUp);
     this.transform.dispose();
     this.orbit.dispose();
+    this.envRenderTarget.dispose();
+    this.solidMaterial.dispose();
+    this.normalMaterial.dispose();
+    this.reflector.geometry.dispose();
+    (this.reflector.material as THREE.Material).dispose();
+    this.reflector.dispose();
+    this.floorMesh.geometry.dispose();
+    (this.floorMesh.material as THREE.Material).dispose();
     this.renderer.dispose();
     if (this.renderer.domElement.parentElement === this.container) {
       this.container.removeChild(this.renderer.domElement);

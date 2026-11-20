@@ -275,6 +275,27 @@ export interface SweepTrialResult {
   finalEnergy: number;
 }
 
+export type StageTheme = 'dark' | 'light';
+
+export type ShadingMode = 'original' | 'albedo' | 'solid' | 'normal';
+
+export interface StageSettings {
+  theme: StageTheme;
+  intensity: number;
+  reflection: number;
+  shadows: boolean;
+  showFloor: boolean;
+  exposure: number;
+  rimLight: number;
+  shading: ShadingMode;
+  wireframe: boolean;
+  showColliders: boolean;
+  showGrid: boolean;
+  showAxes: boolean;
+  explodedView: boolean;
+  autoSpin: boolean;
+}
+
 export interface ViewportOverlays {
   showGrid: boolean;
   showAxes: boolean;
