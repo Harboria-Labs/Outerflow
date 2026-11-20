@@ -63,6 +63,13 @@ export interface StudioEntity {
   visible: boolean;
   physics: EntityPhysics;
   serializedMesh?: SerializedMeshData;
+  parentId?: string | null;
+  locked?: boolean;
+  density?: number;
+  materialPreset?: 'steel' | 'aluminum' | 'carbon' | 'plastic' | 'wood' | 'custom';
+  computedVolumeM3?: number;
+  computedAreaM2?: number;
+  cadLinkId?: string;
 }
 
 export interface StudioJoint {
@@ -419,6 +426,75 @@ export interface ViewportOverlays {
   lighting: LightingPreset;
 }
 
+// ---------- Unified Project, Linked Parameters, Checkpoints & Comparison ----------
+export interface ProjectParameter {
+  id: string;
+  name: string;
+  symbol: string;
+  unit: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  formula?: string;
+  isCalculated?: boolean;
+  targetEntityId?: string;
+  targetField?:
+    | 'size.width'
+    | 'size.height'
+    | 'size.depth'
+    | 'size.radius'
+    | 'density'
+    | 'physics.mass'
+    | 'physics.restitution'
+    | 'position.y';
+  targetJointId?: string;
+  targetJointField?: 'stiffness' | 'damping' | 'restLength' | 'motorSpeed' | 'motorMaxForce';
+}
+
+export interface BodyDynamicSnapshot {
+  position: Vec3;
+  quaternion: [number, number, number, number];
+  linvel: Vec3;
+  angvel: Vec3;
+}
+
+export interface SimulationCheckpoint {
+  id: string;
+  label: string;
+  simTime: number;
+  createdAt: string;
+  bodyStates: Record<string, BodyDynamicSnapshot>;
+  parameters: ProjectParameter[];
+}
+
+export interface DesignExperimentRun {
+  id: string;
+  label: string;
+  color: string;
+  createdAt: string;
+  durationSec: number;
+  parameterSnapshot: Record<string, number>;
+  summaryMetrics: {
+    peakSpeed: number;
+    peakKineticEnergy: number;
+    maxDisplacement: number;
+    finalPosY: number;
+    totalMassKg: number;
+  };
+  samples: TelemetrySample[];
+}
+
+export interface EntityInspectionMetrics {
+  volumeM3: number;
+  surfaceAreaM2: number;
+  densityKgM3: number;
+  massKg: number;
+  centerToCenterDist: number | null;
+  surfaceGapDist: number | null;
+  elevationAngleDeg: number | null;
+}
+
 export interface OuterflowSceneFile {
   format: 'outerflow-scene';
   version: 1;
@@ -432,4 +508,6 @@ export interface OuterflowSceneFile {
   softConfig: SoftSimConfig;
   experimentScript: string;
   logoConfig?: LogoStudioConfig;
+  parameters?: ProjectParameter[];
+  designRuns?: DesignExperimentRun[];
 }

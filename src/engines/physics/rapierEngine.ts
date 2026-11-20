@@ -1,6 +1,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import type {
+  BodyDynamicSnapshot,
   StudioEntity,
   StudioJoint,
   TelemetrySample,
@@ -384,6 +385,56 @@ export class RapierPhysicsEngine {
       rec.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
       rec.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     }
+  }
+
+  captureSnapshots(): Record<string, BodyDynamicSnapshot> {
+    const out: Record<string, BodyDynamicSnapshot> = {};
+    for (const [id, entry] of this.bodies.entries()) {
+      const t = entry.body.translation();
+      const r = entry.body.rotation();
+      const lv = entry.body.linvel();
+      const av = entry.body.angvel();
+      out[id] = {
+        position: [t.x, t.y, t.z],
+        quaternion: [r.x, r.y, r.z, r.w],
+        linvel: [lv.x, lv.y, lv.z],
+        angvel: [av.x, av.y, av.z],
+      };
+    }
+    return out;
+  }
+
+  restoreSnapshots(snapshots: Record<string, BodyDynamicSnapshot>, simTime: number): void {
+    if (!this.world) return;
+    for (const [id, snap] of Object.entries(snapshots)) {
+      const entry = this.bodies.get(id);
+      if (!entry) continue;
+      entry.body.setTranslation(
+        { x: snap.position[0], y: snap.position[1], z: snap.position[2] },
+        true
+      );
+      entry.body.setRotation(
+        {
+          x: snap.quaternion[0],
+          y: snap.quaternion[1],
+          z: snap.quaternion[2],
+          w: snap.quaternion[3],
+        },
+        true
+      );
+      if (entry.body.isDynamic()) {
+        entry.body.setLinvel(
+          { x: snap.linvel[0], y: snap.linvel[1], z: snap.linvel[2] },
+          true
+        );
+        entry.body.setAngvel(
+          { x: snap.angvel[0], y: snap.angvel[1], z: snap.angvel[2] },
+          true
+        );
+        entry.body.wakeUp();
+      }
+    }
+    this.simTime = simTime;
   }
 
   getJointWorldSegments(): JointVisualSegment[] {

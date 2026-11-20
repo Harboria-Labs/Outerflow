@@ -6,10 +6,13 @@ import {
   Cpu,
   Download,
   Droplets,
+  GitCompare,
   Info,
   Layers,
   Link2,
   Play,
+  Plus,
+  Ruler,
   Undo2,
   Zap,
 } from 'lucide-react';
@@ -22,9 +25,12 @@ import type {
   ClothPinMode,
   ColormapName,
   CsgOperation,
+  DesignExperimentRun,
+  EntityInspectionMetrics,
   JointKind,
   MathConfig,
   MeshSculptConfig,
+  ProjectParameter,
   SnapMode,
   SoftSimConfig,
   StudioEntity,
@@ -41,6 +47,11 @@ import {
   SKETCH_2D_PRESETS,
   type BlueprintProjection,
 } from '../engines/cad/sketch2D';
+import {
+  MATERIAL_DENSITY_PRESETS,
+  computeEntityVolumeAndArea,
+  type MaterialPresetKey,
+} from '../engines/project/parameterAndTemplateEngine';
 import {
   AccordionSection,
   SegmentedControl,
@@ -63,6 +74,19 @@ interface RightPanelProps {
   onUpdateJointMotor: (id: string, motorSpeed: number, motorMaxForce: number) => void;
   onAddJoint: (joint: StudioJoint) => void;
   onDeleteJoint: (id: string) => void;
+  // Linked Parameters, Manipulation, Measurement & A/B Comparison
+  parameters?: ProjectParameter[];
+  onUpdateParameter?: (id: string, value: number) => void;
+  onAddCustomParameter?: (param: ProjectParameter) => void;
+  snapToGrid?: boolean;
+  onToggleSnapToGrid?: (enabled: boolean) => void;
+  onAlignEntity?: (entityId: string, targetId: string | null, snapMode: SnapMode) => void;
+  measureTargetId?: string | null;
+  onMeasureTargetChange?: (id: string | null) => void;
+  inspectionMetrics?: EntityInspectionMetrics | null;
+  designRuns?: DesignExperimentRun[];
+  onRunDesignVariant?: () => void;
+  onClearDesignRuns?: () => void;
   // CAD, Parts, 2D<->3D & Code CAD
   cadParts: CadPartConfig[];
   selectedCadPart: CadPartConfig | null;
@@ -182,6 +206,18 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   onUpdateJointMotor,
   onAddJoint,
   onDeleteJoint,
+  parameters = [],
+  onUpdateParameter,
+  onAddCustomParameter,
+  snapToGrid = false,
+  onToggleSnapToGrid,
+  onAlignEntity,
+  measureTargetId = null,
+  onMeasureTargetChange,
+  inspectionMetrics = null,
+  designRuns = [],
+  onRunDesignVariant,
+  onClearDesignRuns,
   cadParts,
   selectedCadPart,
   onUpdateCadPart,
@@ -244,6 +280,11 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   const [newJointA, setNewJointA] = useState<string>(entities[0]?.id ?? '');
   const [newJointB, setNewJointB] = useState<string>(entities[1]?.id ?? '');
   const [expTab, setExpTab] = useState<'script' | 'sweep'>('script');
+  const [alignTargetId, setAlignTargetId] = useState<string>('');
+  const [showAddParam, setShowAddParam] = useState(false);
+  const [newParamName, setNewParamName] = useState('Custom Multiplier');
+  const [newParamSymbol, setNewParamSymbol] = useState('custom_v');
+  const [newParamFormula, setNewParamFormula] = useState('mass * 9.81');
 
   const resolvedCsgA = cadParts.some((p) => p.id === csgA) ? csgA : cadParts[0]?.id ?? '';
   const resolvedCsgB = cadParts.some((p) => p.id === csgB)
@@ -267,6 +308,14 @@ export const RightPanel: React.FC<RightPanelProps> = ({
     circuit.components[0] ??
     null;
 
+  const resolvedAlignTarget = entities.some(
+    (e) => e.id === alignTargetId && e.id !== selectedEntity?.id
+  )
+    ? alignTargetId
+    : entities.find((e) => e.id !== selectedEntity?.id)?.id ?? '';
+
+  const selectedVolArea = selectedEntity ? computeEntityVolumeAndArea(selectedEntity) : null;
+
   return (
     <aside className="side-panel right">
       <div className="panel-header">
@@ -287,7 +336,202 @@ export const RightPanel: React.FC<RightPanelProps> = ({
       <div className="panel-scroll">
         {mode === 'physics' && (
           <>
+            <AccordionSection title={`Linked Parameters & Equations (${parameters.length})`} defaultOpen>
+              {parameters
+                .filter((p) => !p.isCalculated)
+                .map((p) => (
+                  <StudioSlider
+                    key={p.id}
+                    label={`${p.name} (${p.symbol})`}
+                    value={p.value}
+                    min={p.min}
+                    max={p.max}
+                    step={p.step}
+                    decimals={p.step < 0.1 ? 2 : p.step >= 1 ? 0 : 1}
+                    onChange={(val) => onUpdateParameter?.(p.id, val)}
+                  />
+                ))}
+
+              {parameters.some((p) => p.isCalculated) && (
+                <div
+                  style={{
+                    background: 'var(--bg-surface)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 6,
+                    padding: 6,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                  }}
+                >
+                  <span className="field-label" style={{ fontWeight: 600 }}>
+                    Calculated Equations (Auto-Updated)
+                  </span>
+                  {parameters
+                    .filter((p) => p.isCalculated)
+                    .map((p) => (
+                      <div key={p.id} className="details-row" style={{ fontSize: 10.5 }}>
+                        <span className="details-key" title={p.formula || p.name}>
+                          {p.symbol} = {p.formula}
+                        </span>
+                        <span className="details-val" style={{ color: '#38bdf8' }}>
+                          {Math.abs(p.value) < 0.05 ? p.value.toFixed(5) : p.value.toFixed(3)} {p.unit}
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              )}
+
+              {onAddCustomParameter && (
+                <>
+                  <button
+                    type="button"
+                    className="action-btn"
+                    onClick={() => setShowAddParam((s) => !s)}
+                  >
+                    <Plus size={12} />
+                    <span>{showAddParam ? 'Hide Equation Builder' : 'Link Custom Equation'}</span>
+                  </button>
+                  {showAddParam && (
+                    <div
+                      style={{
+                        background: 'var(--bg-surface)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 6,
+                        padding: 7,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 5,
+                      }}
+                    >
+                      <div className="field-row">
+                        <span className="field-label">Name</span>
+                        <input
+                          className="input-text"
+                          style={{ width: '64%' }}
+                          value={newParamName}
+                          onChange={(e) => setNewParamName(e.target.value)}
+                        />
+                      </div>
+                      <div className="field-row">
+                        <span className="field-label">Symbol</span>
+                        <input
+                          className="input-text"
+                          style={{ width: '64%' }}
+                          value={newParamSymbol}
+                          onChange={(e) => setNewParamSymbol(e.target.value)}
+                        />
+                      </div>
+                      <div className="field-row">
+                        <span className="field-label">Formula</span>
+                        <input
+                          className="input-text"
+                          style={{ width: '64%', fontFamily: 'var(--font-mono)' }}
+                          value={newParamFormula}
+                          onChange={(e) => setNewParamFormula(e.target.value)}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        className="action-btn primary"
+                        onClick={() => {
+                          const cleanSym = newParamSymbol.trim() || `p_${Date.now() % 100}`;
+                          onAddCustomParameter({
+                            id: `custom-${Date.now()}`,
+                            name: newParamName.trim() || cleanSym,
+                            symbol: cleanSym,
+                            unit: 'u',
+                            value: 0,
+                            min: 0,
+                            max: 1000,
+                            step: 0.1,
+                            isCalculated: true,
+                            formula: newParamFormula.trim() || '1',
+                          });
+                          setShowAddParam(false);
+                        }}
+                      >
+                        Add Calculated Equation
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </AccordionSection>
+
+            <AccordionSection
+              title={`Experiment Comparison (Design A vs. B) (${designRuns.length})`}
+              defaultOpen
+            >
+              <div style={{ display: 'flex', gap: 5 }}>
+                <button
+                  type="button"
+                  className="action-btn primary"
+                  style={{ flex: 1 }}
+                  onClick={() => onRunDesignVariant?.()}
+                >
+                  <GitCompare size={12} />
+                  <span>+ Run Variant {String.fromCharCode(65 + (designRuns.length % 26))}</span>
+                </button>
+                {designRuns.length > 0 && onClearDesignRuns && (
+                  <button
+                    type="button"
+                    className="action-btn"
+                    onClick={onClearDesignRuns}
+                    title="Clear Design Variants"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              {designRuns.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {designRuns.map((run) => (
+                    <div
+                      key={run.id}
+                      style={{
+                        background: 'var(--bg-surface)',
+                        border: '1px solid var(--border)',
+                        borderLeft: `3px solid ${run.color}`,
+                        borderRadius: 5,
+                        padding: '5px 7px',
+                        fontSize: 10.5,
+                      }}
+                    >
+                      <div className="details-row">
+                        <strong style={{ color: run.color }}>{run.label}</strong>
+                        <span className="details-val">
+                          Mass {run.summaryMetrics.totalMassKg.toFixed(2)} kg
+                        </span>
+                      </div>
+                      <div className="details-row" style={{ marginTop: 2 }}>
+                        <span className="details-key">
+                          Peak {run.summaryMetrics.peakSpeed.toFixed(2)} m/s
+                        </span>
+                        <span className="details-key">
+                          KE {run.summaryMetrics.peakKineticEnergy.toFixed(1)} J · Δ{' '}
+                          {run.summaryMetrics.maxDisplacement.toFixed(2)} m
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <span className="field-label">
+                  Tweak parameters above, then capture Design A vs. Design B side-by-side.
+                </span>
+              )}
+            </AccordionSection>
+
             <AccordionSection title="Body Inspector" defaultOpen>
+              {onToggleSnapToGrid && (
+                <ToggleSwitch
+                  label="Snap to Grid (0.25m / 15°)"
+                  checked={snapToGrid}
+                  onChange={onToggleSnapToGrid}
+                />
+              )}
+
               {selectedEntity ? (
                 <>
                   <div className="field-row">
@@ -316,6 +560,189 @@ export const RightPanel: React.FC<RightPanelProps> = ({
                       <option value="kinematic">Kinematic</option>
                     </select>
                   </div>
+
+                  <div className="field-row">
+                    <span className="field-label">Parent Group</span>
+                    <select
+                      className="input-select"
+                      style={{ width: '64%' }}
+                      value={selectedEntity.parentId ?? ''}
+                      onChange={(e) =>
+                        onUpdateEntity(selectedEntity.id, {
+                          parentId: e.target.value || null,
+                        })
+                      }
+                    >
+                      <option value="">None (Root)</option>
+                      {entities
+                        .filter((e) => e.id !== selectedEntity.id)
+                        .map((e) => (
+                          <option key={e.id} value={e.id}>
+                            {e.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+
+                  {onAlignEntity && (
+                    <div
+                      style={{
+                        background: 'var(--bg-surface)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 6,
+                        padding: 6,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 5,
+                      }}
+                    >
+                      <div className="field-row">
+                        <span className="field-label">Align To</span>
+                        <select
+                          className="input-select"
+                          style={{ width: '62%' }}
+                          value={resolvedAlignTarget}
+                          onChange={(e) => setAlignTargetId(e.target.value)}
+                        >
+                          {entities
+                            .filter((e) => e.id !== selectedEntity.id)
+                            .map((e) => (
+                              <option key={e.id} value={e.id}>
+                                {e.name}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        {(
+                          [
+                            ['onTop', 'Stack Top'],
+                            ['centerAlign', 'Center'],
+                            ['toRight', 'Beside'],
+                            ['ground', 'Ground'],
+                          ] as [SnapMode, string][]
+                        ).map(([m, lbl]) => (
+                          <button
+                            key={m}
+                            type="button"
+                            className="action-btn"
+                            style={{ flex: 1, fontSize: 10, padding: '4px 3px' }}
+                            onClick={() =>
+                              onAlignEntity(
+                                selectedEntity.id,
+                                m === 'ground' ? null : resolvedAlignTarget || null,
+                                m
+                              )
+                            }
+                          >
+                            {lbl}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="field-row">
+                    <span className="field-label">Material</span>
+                    <select
+                      className="input-select"
+                      style={{ width: '64%' }}
+                      value={selectedEntity.materialPreset ?? 'custom'}
+                      onChange={(e) => {
+                        const key = e.target.value as MaterialPresetKey | 'custom';
+                        if (key === 'custom') {
+                          onUpdateEntity(selectedEntity.id, { materialPreset: 'custom' });
+                          return;
+                        }
+                        const mat = MATERIAL_DENSITY_PRESETS[key];
+                        const vol = computeEntityVolumeAndArea(selectedEntity).volumeM3;
+                        const nextMass = Number(
+                          Math.max(0.05, Math.min(5000, vol * mat.density)).toFixed(3)
+                        );
+                        onUpdateEntity(selectedEntity.id, {
+                          materialPreset: key,
+                          density: mat.density,
+                          color: mat.color,
+                          metalness: mat.metalness,
+                          roughness: mat.roughness,
+                          physics: { ...selectedEntity.physics, mass: nextMass },
+                        });
+                      }}
+                    >
+                      <option value="steel">Structural Steel (7800)</option>
+                      <option value="aluminum">6061 Aluminum (2700)</option>
+                      <option value="carbon">Carbon Fiber (1600)</option>
+                      <option value="plastic">ABS Polymer (1050)</option>
+                      <option value="wood">Hardwood Oak (700)</option>
+                      <option value="custom">Custom Material</option>
+                    </select>
+                  </div>
+
+                  <div className="field-row">
+                    <span className="field-label">Density kg/m³</span>
+                    <input
+                      type="number"
+                      step={50}
+                      min={50}
+                      className="input-number"
+                      style={{ width: '64%' }}
+                      value={selectedEntity.density ?? 2700}
+                      onChange={(e) => {
+                        const density = Math.max(10, Number(e.target.value) || 100);
+                        const vol = computeEntityVolumeAndArea(selectedEntity).volumeM3;
+                        const nextMass = Number(
+                          Math.max(0.05, Math.min(5000, vol * density)).toFixed(3)
+                        );
+                        onUpdateEntity(selectedEntity.id, {
+                          materialPreset: 'custom',
+                          density,
+                          physics: { ...selectedEntity.physics, mass: nextMass },
+                        });
+                      }}
+                    />
+                  </div>
+
+                  {selectedVolArea && (
+                    <div className="details-row" style={{ fontSize: 10.5 }}>
+                      <span className="details-key">
+                        Vol {selectedVolArea.volumeM3.toFixed(5)} m³
+                      </span>
+                      <span className="details-val" style={{ color: '#34d399' }}>
+                        Mass = {selectedEntity.physics.mass.toFixed(2)} kg
+                      </span>
+                    </div>
+                  )}
+
+                  <Vec3Editor
+                    label="Size W / H / D (dm)"
+                    value={[
+                      selectedEntity.size.width,
+                      selectedEntity.size.height,
+                      selectedEntity.size.depth,
+                    ]}
+                    onChange={([w, h, d]) => {
+                      const nextEnt = {
+                        ...selectedEntity,
+                        size: {
+                          ...selectedEntity.size,
+                          width: Math.max(0.05, w),
+                          height: Math.max(0.05, h),
+                          depth: Math.max(0.05, d),
+                          radius: Math.max(0.05, Math.min(w, d) * 0.5),
+                        },
+                      };
+                      const vol = computeEntityVolumeAndArea(nextEnt).volumeM3;
+                      const nextMass = selectedEntity.density
+                        ? Number(
+                            Math.max(0.05, Math.min(5000, vol * selectedEntity.density)).toFixed(3)
+                          )
+                        : selectedEntity.physics.mass;
+                      onUpdateEntity(selectedEntity.id, {
+                        size: nextEnt.size,
+                        physics: { ...selectedEntity.physics, mass: nextMass },
+                      });
+                    }}
+                  />
 
                   <Vec3Editor
                     label="Position (m)"
@@ -411,6 +838,88 @@ export const RightPanel: React.FC<RightPanelProps> = ({
                 </>
               ) : (
                 <span className="field-label">Click any body in the viewport to inspect.</span>
+              )}
+            </AccordionSection>
+
+            <AccordionSection
+              title="3D Measurement & Inspection"
+              defaultOpen={Boolean(measureTargetId)}
+            >
+              {inspectionMetrics ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <div className="details-row" style={{ fontSize: 10.5 }}>
+                    <span className="details-key">Volume</span>
+                    <span className="details-val">{inspectionMetrics.volumeM3.toFixed(6)} m³</span>
+                  </div>
+                  <div className="details-row" style={{ fontSize: 10.5 }}>
+                    <span className="details-key">Surface Area</span>
+                    <span className="details-val">{inspectionMetrics.surfaceAreaM2.toFixed(4)} m²</span>
+                  </div>
+                  <div className="details-row" style={{ fontSize: 10.5 }}>
+                    <span className="details-key">Density / Mass</span>
+                    <span className="details-val">
+                      {inspectionMetrics.densityKgM3.toFixed(0)} kg/m³ ·{' '}
+                      {inspectionMetrics.massKg.toFixed(2)} kg
+                    </span>
+                  </div>
+                  {onMeasureTargetChange && (
+                    <div className="field-row" style={{ marginTop: 2 }}>
+                      <span className="field-label" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <Ruler size={12} color="#22d3ee" />
+                        Measure To
+                      </span>
+                      <select
+                        className="input-select"
+                        style={{ width: '58%' }}
+                        value={measureTargetId ?? ''}
+                        onChange={(e) => onMeasureTargetChange(e.target.value || null)}
+                      >
+                        <option value="">Off</option>
+                        {entities
+                          .filter((e) => e.id !== selectedEntity?.id)
+                          .map((e) => (
+                            <option key={e.id} value={e.id}>
+                              {e.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  )}
+                  {inspectionMetrics.centerToCenterDist !== null && (
+                    <div
+                      style={{
+                        background: 'var(--bg-surface)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 6,
+                        padding: 6,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 3,
+                      }}
+                    >
+                      <div className="details-row" style={{ fontSize: 10.5 }}>
+                        <span className="details-key">Center Distance</span>
+                        <span className="details-val" style={{ color: '#22d3ee' }}>
+                          {inspectionMetrics.centerToCenterDist.toFixed(3)} m
+                        </span>
+                      </div>
+                      <div className="details-row" style={{ fontSize: 10.5 }}>
+                        <span className="details-key">Surface Clearance</span>
+                        <span className="details-val">
+                          {inspectionMetrics.surfaceGapDist?.toFixed(3)} m
+                        </span>
+                      </div>
+                      <div className="details-row" style={{ fontSize: 10.5 }}>
+                        <span className="details-key">Elevation Angle</span>
+                        <span className="details-val">
+                          {inspectionMetrics.elevationAngleDeg?.toFixed(1)}°
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <span className="field-label">Select an entity to measure volume &amp; gaps.</span>
               )}
             </AccordionSection>
 

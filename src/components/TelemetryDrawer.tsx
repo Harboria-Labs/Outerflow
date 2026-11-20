@@ -1,12 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Activity, Download, Trash2, X } from 'lucide-react';
-import type { SweepTrialResult, TelemetrySample } from '../types/studio';
+import { Activity, Download, GitCompare, Play, Trash2, X } from 'lucide-react';
+import type {
+  DesignExperimentRun,
+  SweepTrialResult,
+  TelemetrySample,
+} from '../types/studio';
 
 interface TelemetryDrawerProps {
   open: boolean;
   onClose: () => void;
   samples: TelemetrySample[];
   sweepResults: SweepTrialResult[];
+  designRuns?: DesignExperimentRun[];
+  onRunDesignVariant?: () => void;
+  onClearDesignRuns?: () => void;
   onClearTelemetry: () => void;
   onExportTelemetryCSV: () => void;
   onExportSweepCSV: () => void;
@@ -17,11 +24,14 @@ export const TelemetryDrawer: React.FC<TelemetryDrawerProps> = ({
   onClose,
   samples,
   sweepResults,
+  designRuns = [],
+  onRunDesignVariant,
+  onClearDesignRuns,
   onClearTelemetry,
   onExportTelemetryCSV,
   onExportSweepCSV,
 }) => {
-  const [tab, setTab] = useState<'live' | 'sweep'>('live');
+  const [tab, setTab] = useState<'live' | 'sweep' | 'compare'>('live');
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -29,6 +39,12 @@ export const TelemetryDrawer: React.FC<TelemetryDrawerProps> = ({
       setTab('sweep');
     }
   }, [sweepResults]);
+
+  useEffect(() => {
+    if (designRuns.length > 0) {
+      setTab('compare');
+    }
+  }, [designRuns.length]);
 
   useEffect(() => {
     if (!open) return;
@@ -119,7 +135,7 @@ export const TelemetryDrawer: React.FC<TelemetryDrawerProps> = ({
         ctx.fillText(`● ${s.label}`, lx, 12);
         lx += 86;
       }
-    } else {
+    } else if (tab === 'sweep') {
       if (sweepResults.length === 0) {
         ctx.fillStyle = '#71717a';
         ctx.font = '11px JetBrains Mono, monospace';
@@ -172,8 +188,50 @@ export const TelemetryDrawer: React.FC<TelemetryDrawerProps> = ({
       ctx.fillText(`● ${sweepResults[0].primaryMetricName}`, pad.l, 12);
       ctx.fillStyle = '#f59e0b';
       ctx.fillText(`● ${sweepResults[0].secondaryMetricName}`, pad.l + 150, 12);
+    } else {
+      if (designRuns.length === 0) {
+        ctx.fillStyle = '#71717a';
+        ctx.font = '11px JetBrains Mono, monospace';
+        ctx.fillText('Click "+ Run Variant" to snapshot parameters & compare Design A vs B...', 16, h / 2);
+        return;
+      }
+
+      let maxT = 1;
+      let minV = 0;
+      let maxV = 1;
+      for (const r of designRuns) {
+        for (const s of r.samples) {
+          if (s.time > maxT) maxT = s.time;
+          if (s.selectedSpeed < minV) minV = s.selectedSpeed;
+          if (s.selectedSpeed > maxV) maxV = s.selectedSpeed;
+        }
+      }
+      const spanY = Math.max(0.2, maxV - minV);
+
+      let lx = pad.l;
+      ctx.font = '10px JetBrains Mono, monospace';
+      for (const r of designRuns) {
+        ctx.strokeStyle = r.color;
+        ctx.lineWidth = 1.9;
+        ctx.beginPath();
+        r.samples.forEach((s, idx) => {
+          const x = pad.l + (s.time / Math.max(0.1, maxT)) * pw;
+          const y = pad.t + ph - ((s.selectedSpeed - minV) / spanY) * ph;
+          if (idx === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+
+        ctx.fillStyle = r.color;
+        ctx.fillText(`● ${r.label} (m=${r.summaryMetrics.totalMassKg.toFixed(1)}kg)`, lx, 12);
+        lx += 135;
+      }
+
+      ctx.fillStyle = '#71717a';
+      ctx.fillText(`${maxV.toFixed(1)} m/s`, 4, pad.t + 6);
+      ctx.fillText(`${minV.toFixed(1)}`, 4, pad.t + ph);
     }
-  }, [open, tab, samples, sweepResults]);
+  }, [open, tab, samples, sweepResults, designRuns]);
 
   if (!open) return null;
 
@@ -209,6 +267,28 @@ export const TelemetryDrawer: React.FC<TelemetryDrawerProps> = ({
           </button>
           <button
             type="button"
+            className={`hud-btn ${tab === 'compare' ? 'active' : ''}`}
+            onClick={() => setTab('compare')}
+          >
+            <GitCompare size={11} />
+            <span>Compare ({designRuns.length})</span>
+          </button>
+          {onRunDesignVariant && (
+            <button
+              type="button"
+              className="hud-btn active"
+              onClick={() => {
+                setTab('compare');
+                onRunDesignVariant();
+              }}
+              title="Snapshot current parameters and run variant benchmark"
+            >
+              <Play size={11} />
+              <span>+ Run Variant</span>
+            </button>
+          )}
+          <button
+            type="button"
             className="mini-icon-btn"
             onClick={tab === 'live' ? onExportTelemetryCSV : onExportSweepCSV}
             title="Export CSV"
@@ -218,8 +298,11 @@ export const TelemetryDrawer: React.FC<TelemetryDrawerProps> = ({
           <button
             type="button"
             className="mini-icon-btn"
-            onClick={onClearTelemetry}
-            title="Clear Telemetry"
+            onClick={() => {
+              if (tab === 'compare' && onClearDesignRuns) onClearDesignRuns();
+              else onClearTelemetry();
+            }}
+            title={tab === 'compare' ? 'Clear Comparison Runs' : 'Clear Telemetry'}
           >
             <Trash2 size={13} />
           </button>
@@ -240,7 +323,30 @@ export const TelemetryDrawer: React.FC<TelemetryDrawerProps> = ({
         </div>
 
         <div className="telemetry-table-wrap">
-          {tab === 'sweep' && sweepResults.length > 0 ? (
+          {tab === 'compare' && designRuns.length > 0 ? (
+            <table className="sweep-table">
+              <thead>
+                <tr>
+                  <th>Variant</th>
+                  <th>Mass (kg)</th>
+                  <th>Peak Spd</th>
+                  <th>Peak KE</th>
+                  <th>Disp (m)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {designRuns.map((r) => (
+                  <tr key={r.id}>
+                    <td style={{ color: r.color, fontWeight: 600 }}>{r.label}</td>
+                    <td>{r.summaryMetrics.totalMassKg.toFixed(2)}</td>
+                    <td>{r.summaryMetrics.peakSpeed.toFixed(2)}</td>
+                    <td>{r.summaryMetrics.peakKineticEnergy.toFixed(1)}</td>
+                    <td>{r.summaryMetrics.maxDisplacement.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : tab === 'sweep' && sweepResults.length > 0 ? (
             <table className="sweep-table">
               <thead>
                 <tr>

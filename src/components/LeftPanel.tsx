@@ -1,13 +1,17 @@
 import React, { useState } from 'react';
 import {
+  Bookmark,
   Box,
   ChevronsLeft,
   Copy,
   Eye,
   EyeOff,
   Lock,
+  Play,
+  Redo2,
   RotateCcw,
   Trash2,
+  Undo2,
   Unlock,
 } from 'lucide-react';
 import type {
@@ -23,6 +27,7 @@ import type {
   SculptBrushKind,
   ShadingMode,
   ShapeKind,
+  SimulationCheckpoint,
   SoftSimConfig,
   SoftSimKind,
   StageSettings,
@@ -58,8 +63,19 @@ interface LeftPanelProps {
   onSelect: (id: string | null) => void;
   onAddPhysicsEntity: (shape: ShapeKind) => void;
   onToggleEntityVisible: (id: string) => void;
+  onToggleEntityLocked?: (id: string) => void;
   onDuplicateEntity: (id: string) => void;
   onDeleteEntity: (id: string) => void;
+  // Unified Project & Checkpoints
+  onSyncCadPartToPhysics?: (cadPartId: string) => void;
+  checkpoints?: SimulationCheckpoint[];
+  onSaveCheckpoint?: () => void;
+  onRestoreCheckpoint?: (id: string) => void;
+  onDeleteCheckpoint?: (id: string) => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
   // CAD & Library
   cadParts: CadPartConfig[];
   onAddCadPart: (kind: CadPrimitiveKind) => void;
@@ -153,8 +169,18 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
   onSelect,
   onAddPhysicsEntity,
   onToggleEntityVisible,
+  onToggleEntityLocked,
   onDuplicateEntity,
   onDeleteEntity,
+  onSyncCadPartToPhysics,
+  checkpoints = [],
+  onSaveCheckpoint,
+  onRestoreCheckpoint,
+  onDeleteCheckpoint,
+  canUndo = false,
+  canRedo = false,
+  onUndo,
+  onRedo,
   cadParts,
   onAddCadPart,
   onAddLibraryPart,
@@ -209,7 +235,7 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
 
       <div className="panel-scroll">
         {(mode === 'physics' || mode === 'experiments') && (
-          <AccordionSection title="Physics Scenes & Spawn" defaultOpen>
+          <AccordionSection title="Playable Mechanisms & Templates" defaultOpen>
             <div className="compact-grid">
               {physicsPresets.map((p) => (
                 <button
@@ -623,51 +649,171 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
           />
         </AccordionSection>
 
-        {/* Hierarchy List */}
+        {/* Unified Project Scene Tree & Checkpoints */}
         {(mode === 'physics' || mode === 'experiments') && (
-          <AccordionSection title={`Hierarchy (${entities.length})`} defaultOpen={false}>
-            <div className="hierarchy-list">
-              {entities.map((ent) => (
-                <div
-                  key={ent.id}
-                  className={`hierarchy-item ${selectedId === ent.id ? 'selected' : ''}`}
-                  onClick={() => onSelect(ent.id)}
-                >
-                  <div className="hierarchy-label">
-                    <span className="color-dot" style={{ background: ent.color }} />
-                    <span className="hierarchy-name">{ent.name}</span>
-                    <span className="hierarchy-tag">{ent.bodyType.slice(0, 3)}</span>
+          <>
+            <AccordionSection
+              title={`Unified Project Scene Tree (${entities.length + cadParts.length})`}
+              defaultOpen
+            >
+              <div className="hierarchy-list">
+                {entities.map((ent) => (
+                  <div
+                    key={ent.id}
+                    className={`hierarchy-item ${selectedId === ent.id ? 'selected' : ''}`}
+                    onClick={() => onSelect(ent.id)}
+                    style={ent.parentId ? { paddingLeft: 18 } : undefined}
+                  >
+                    <div className="hierarchy-label">
+                      <span className="color-dot" style={{ background: ent.color }} />
+                      <span className="hierarchy-name">
+                        {ent.parentId ? '↳ ' : ''}
+                        {ent.name}
+                      </span>
+                      <span className="hierarchy-tag">
+                        {ent.locked ? 'FIX' : ent.bodyType.slice(0, 3)}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 1 }} onClick={(e) => e.stopPropagation()}>
+                      {onToggleEntityLocked && (
+                        <button
+                          type="button"
+                          className="mini-icon-btn"
+                          onClick={() => onToggleEntityLocked(ent.id)}
+                          title={ent.locked ? 'Unlock' : 'Lock Position'}
+                        >
+                          {ent.locked ? <Lock size={12} color="#f59e0b" /> : <Unlock size={12} />}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="mini-icon-btn"
+                        onClick={() => onToggleEntityVisible(ent.id)}
+                        title="Visibility"
+                      >
+                        {ent.visible ? <Eye size={12} /> : <EyeOff size={12} />}
+                      </button>
+                      <button
+                        type="button"
+                        className="mini-icon-btn"
+                        onClick={() => onDuplicateEntity(ent.id)}
+                        title="Duplicate"
+                      >
+                        <Copy size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        className="mini-icon-btn"
+                        onClick={() => onDeleteEntity(ent.id)}
+                        title="Delete"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', gap: 1 }} onClick={(e) => e.stopPropagation()}>
-                    <button
-                      type="button"
-                      className="mini-icon-btn"
-                      onClick={() => onToggleEntityVisible(ent.id)}
-                      title="Visibility"
+                ))}
+
+                {cadParts.length > 0 && (
+                  <>
+                    <div
+                      className="field-label"
+                      style={{ marginTop: 6, marginBottom: 2, fontWeight: 600 }}
                     >
-                      {ent.visible ? <Eye size={12} /> : <EyeOff size={12} />}
-                    </button>
-                    <button
-                      type="button"
-                      className="mini-icon-btn"
-                      onClick={() => onDuplicateEntity(ent.id)}
-                      title="Duplicate"
-                    >
-                      <Copy size={12} />
-                    </button>
-                    <button
-                      type="button"
-                      className="mini-icon-btn"
-                      onClick={() => onDeleteEntity(ent.id)}
-                      title="Delete"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
+                      Project CAD Parts ({cadParts.length})
+                    </div>
+                    {cadParts.map((part) => (
+                      <div key={part.id} className="hierarchy-item">
+                        <div className="hierarchy-label">
+                          <span className="color-dot" style={{ background: part.color }} />
+                          <span className="hierarchy-name">{part.name}</span>
+                        </div>
+                        {onSyncCadPartToPhysics && (
+                          <button
+                            type="button"
+                            className="cat-pill"
+                            onClick={() => onSyncCadPartToPhysics(part.id)}
+                            title="Add CAD part into active Physics mechanism"
+                          >
+                            ⇄ Live
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            </AccordionSection>
+
+            <AccordionSection
+              title={`Checkpoints & History (${checkpoints.length})`}
+              defaultOpen={checkpoints.length > 0}
+            >
+              {(onUndo || onRedo) && (
+                <div style={{ display: 'flex', gap: 5 }}>
+                  <button
+                    type="button"
+                    className="action-btn"
+                    style={{ flex: 1, opacity: canUndo ? 1 : 0.45 }}
+                    disabled={!canUndo}
+                    onClick={onUndo}
+                  >
+                    <Undo2 size={12} />
+                    <span>Undo</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="action-btn"
+                    style={{ flex: 1, opacity: canRedo ? 1 : 0.45 }}
+                    disabled={!canRedo}
+                    onClick={onRedo}
+                  >
+                    <Redo2 size={12} />
+                    <span>Redo</span>
+                  </button>
                 </div>
-              ))}
-            </div>
-          </AccordionSection>
+              )}
+              {onSaveCheckpoint && (
+                <button type="button" className="action-btn primary" onClick={onSaveCheckpoint}>
+                  <Bookmark size={12} />
+                  <span>Save State Checkpoint</span>
+                </button>
+              )}
+              {checkpoints.length > 0 && (
+                <div className="hierarchy-list">
+                  {checkpoints.map((cp) => (
+                    <div key={cp.id} className="hierarchy-item">
+                      <div className="hierarchy-label">
+                        <span className="hierarchy-name">{cp.label}</span>
+                        <span className="hierarchy-tag">{cp.simTime.toFixed(2)}s</span>
+                      </div>
+                      <div style={{ display: 'flex', gap: 2 }}>
+                        {onRestoreCheckpoint && (
+                          <button
+                            type="button"
+                            className="mini-icon-btn"
+                            onClick={() => onRestoreCheckpoint(cp.id)}
+                            title="Restore Checkpoint"
+                          >
+                            <Play size={11} color="#34d399" />
+                          </button>
+                        )}
+                        {onDeleteCheckpoint && (
+                          <button
+                            type="button"
+                            className="mini-icon-btn"
+                            onClick={() => onDeleteCheckpoint(cp.id)}
+                            title="Delete Checkpoint"
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </AccordionSection>
+          </>
         )}
 
         {mode === 'cad' && (

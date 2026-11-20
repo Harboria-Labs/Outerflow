@@ -65,6 +65,7 @@ export class StudioViewport {
   readonly electronicsGroup = new THREE.Group();
   readonly mathGroup = new THREE.Group();
   readonly softGroup = new THREE.Group();
+  readonly measurementGroup = new THREE.Group();
 
   private envRenderTarget: THREE.WebGLRenderTarget;
   private gridHelper: THREE.GridHelper;
@@ -250,6 +251,7 @@ export class StudioViewport {
     this.scene.add(this.electronicsGroup);
     this.scene.add(this.mathGroup);
     this.scene.add(this.softGroup);
+    this.scene.add(this.measurementGroup);
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
@@ -618,6 +620,7 @@ export class StudioViewport {
       mesh.userData = {
         id: ent.id,
         kind: 'physics',
+        locked: Boolean(ent.locked),
         baseMaterial: mat,
         basePos: [...ent.position] as Vec3,
       };
@@ -784,6 +787,47 @@ export class StudioViewport {
       filename
     );
     this.transform.getHelper().visible = prevGizmoVis;
+  }
+
+  setSnapToGrid(
+    enabled: boolean,
+    translationSnap = 0.25,
+    rotationSnapRad = Math.PI / 12
+  ): void {
+    this.transform.setTranslationSnap(enabled ? translationSnap : null);
+    this.transform.setRotationSnap(enabled ? rotationSnapRad : null);
+    this.transform.setScaleSnap(enabled ? 0.1 : null);
+  }
+
+  updateMeasurementOverlay(ptA: Vec3 | null, ptB: Vec3 | null): void {
+    for (const c of this.measurementGroup.children) {
+      const obj = c as THREE.Line | THREE.Mesh;
+      obj.geometry?.dispose();
+      (obj.material as THREE.Material)?.dispose();
+    }
+    this.measurementGroup.clear();
+    if (!ptA || !ptB) return;
+
+    const lineGeom = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(...ptA),
+      new THREE.Vector3(...ptB),
+    ]);
+    const lineMat = new THREE.LineDashedMaterial({
+      color: '#22d3ee',
+      dashSize: 0.18,
+      gapSize: 0.1,
+    });
+    const line = new THREE.Line(lineGeom, lineMat);
+    line.computeLineDistances();
+    this.measurementGroup.add(line);
+
+    const endGeomA = new THREE.SphereGeometry(0.08, 12, 10);
+    const endMat = new THREE.MeshBasicMaterial({ color: '#22d3ee' });
+    const dotA = new THREE.Mesh(endGeomA, endMat);
+    dotA.position.set(...ptA);
+    const dotB = new THREE.Mesh(endGeomA.clone(), endMat);
+    dotB.position.set(...ptB);
+    this.measurementGroup.add(dotA, dotB);
   }
 
   render(): void {

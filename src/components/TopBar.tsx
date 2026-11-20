@@ -3,6 +3,7 @@ import {
   Activity,
   Atom,
   Box,
+  CheckCircle2,
   Cpu,
   Download,
   Film,
@@ -11,9 +12,11 @@ import {
   Maximize2,
   Minimize2,
   PenTool,
+  Redo2,
   RotateCcw,
   Sigma,
   Sparkles,
+  Undo2,
   Upload,
   Waves,
 } from 'lucide-react';
@@ -30,6 +33,11 @@ interface TopBarProps {
   onToggleTelemetry: () => void;
   zenMode: boolean;
   onToggleZenMode: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  autosavedAt?: string | null;
   videoRecording: boolean;
   videoElapsedSec: number;
   onToggleVideoRecord: () => void;
@@ -66,6 +74,11 @@ export const TopBar: React.FC<TopBarProps> = ({
   onToggleTelemetry,
   zenMode,
   onToggleZenMode,
+  canUndo = false,
+  canRedo = false,
+  onUndo,
+  onRedo,
+  autosavedAt,
   videoRecording,
   videoElapsedSec,
   onToggleVideoRecord,
@@ -139,6 +152,43 @@ export const TopBar: React.FC<TopBarProps> = ({
             {videoRecording ? `Stop ${videoElapsedSec}s` : 'Rec Video'}
           </span>
         </button>
+
+        {onUndo && (
+          <button
+            type="button"
+            className="top-btn hide-md"
+            disabled={!canUndo}
+            onClick={onUndo}
+            title="Undo Project Edit (Ctrl+Z)"
+            style={{ opacity: canUndo ? 1 : 0.45 }}
+          >
+            <Undo2 size={13} />
+          </button>
+        )}
+
+        {onRedo && (
+          <button
+            type="button"
+            className="top-btn hide-md"
+            disabled={!canRedo}
+            onClick={onRedo}
+            title="Redo Project Edit (Ctrl+Y)"
+            style={{ opacity: canRedo ? 1 : 0.45 }}
+          >
+            <Redo2 size={13} />
+          </button>
+        )}
+
+        {autosavedAt && (
+          <span
+            className="top-btn hide-md"
+            title={`Project autosaved locally at ${autosavedAt}`}
+            style={{ cursor: 'default', borderColor: 'transparent', color: '#34d399', padding: '0 6px' }}
+          >
+            <CheckCircle2 size={12} />
+            <span style={{ fontSize: 10.5 }}>Autosaved</span>
+          </span>
+        )}
 
         <button
           type="button"

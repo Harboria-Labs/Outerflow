@@ -1,12 +1,21 @@
 import React from 'react';
-import { Circle, Pause, Play, RotateCcw, StepForward } from 'lucide-react';
-import type { Vec3 } from '../types/studio';
+import {
+  Bookmark,
+  Circle,
+  Pause,
+  Play,
+  RotateCcw,
+  StepBack,
+  StepForward,
+} from 'lucide-react';
+import type { SimulationCheckpoint, Vec3 } from '../types/studio';
 
 interface TransportBarProps {
   simTime: number;
   running: boolean;
   onToggleRun: () => void;
   onStep: () => void;
+  onStepBack?: () => void;
   onReset: () => void;
   timeScale: number;
   onTimeScaleChange: (s: number) => void;
@@ -17,6 +26,9 @@ interface TransportBarProps {
   recordedFramesCount: number;
   playbackIndex: number | null;
   onScrubFrame: (idx: number | null) => void;
+  checkpoints?: SimulationCheckpoint[];
+  onSaveCheckpoint?: () => void;
+  onRestoreCheckpoint?: (cpId: string) => void;
 }
 
 const SPEED_OPTIONS = [0.5, 1, 2, 5];
@@ -32,6 +44,7 @@ export const TransportBar: React.FC<TransportBarProps> = ({
   running,
   onToggleRun,
   onStep,
+  onStepBack,
   onReset,
   timeScale,
   onTimeScaleChange,
@@ -42,6 +55,9 @@ export const TransportBar: React.FC<TransportBarProps> = ({
   recordedFramesCount,
   playbackIndex,
   onScrubFrame,
+  checkpoints = [],
+  onSaveCheckpoint,
+  onRestoreCheckpoint,
 }) => {
   const gravityKey =
     Math.abs(gravity[1] + 9.81) < 0.05
@@ -63,6 +79,17 @@ export const TransportBar: React.FC<TransportBarProps> = ({
         <RotateCcw size={13} />
       </button>
 
+      {onStepBack && recordedFramesCount > 0 && (
+        <button
+          type="button"
+          className="play-pill-btn"
+          onClick={onStepBack}
+          title="Step Back 1 Recorded Frame"
+        >
+          <StepBack size={13} />
+        </button>
+      )}
+
       <button
         type="button"
         className={`play-pill-btn ${running ? 'running' : 'active'}`}
@@ -80,6 +107,32 @@ export const TransportBar: React.FC<TransportBarProps> = ({
       >
         <StepForward size={13} />
       </button>
+
+      {onSaveCheckpoint && (
+        <button
+          type="button"
+          className="play-pill-btn"
+          onClick={onSaveCheckpoint}
+          title="Save Simulation Checkpoint at Current Time"
+        >
+          <Bookmark size={12} />
+          <span className="hide-sm">+CP</span>
+        </button>
+      )}
+
+      {checkpoints.slice(-3).map((cp) => (
+        <button
+          key={cp.id}
+          type="button"
+          className="play-pill-btn"
+          onClick={() => onRestoreCheckpoint?.(cp.id)}
+          title={`Restore ${cp.label} at ${cp.simTime.toFixed(2)}s`}
+        >
+          <span>
+            {cp.label} {cp.simTime.toFixed(1)}s
+          </span>
+        </button>
+      ))}
 
       <span className="hud-divider" />
 

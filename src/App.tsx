@@ -9,16 +9,19 @@ import type {
   CircuitComponentKind,
   CircuitSchematic,
   CsgOperation,
+  DesignExperimentRun,
   GizmoMode,
   LogoStudioConfig,
   MathConfig,
   MathModeKind,
   MeshSculptConfig,
   OuterflowSceneFile,
+  ProjectParameter,
   RecordedFrame,
   SculptBasePreset,
   SculptBrushKind,
   ShapeKind,
+  SimulationCheckpoint,
   SnapMode,
   SoftSimConfig,
   SoftSimKind,
@@ -118,6 +121,13 @@ import {
   printDesignSheet,
 } from './engines/io/mediaExporters';
 import { loadSavedLogoConfig, saveLogoConfig } from './engines/brand/logoScene';
+import {
+  evaluateProjectParameters,
+  getDefaultParametersForPreset,
+  inspectEntities,
+  runDesignVariantExperiment,
+  syncEntityPhysicalMass,
+} from './engines/project/parameterAndTemplateEngine';
 import { LogoMotionOverlay } from './components/LogoMotionOverlay';
 import { TopBar } from './components/TopBar';
 import { LeftPanel } from './components/LeftPanel';
@@ -138,14 +148,46 @@ function createInitialMathConfig(): MathConfig {
   };
 }
 
+const AUTOSAVE_KEY = 'outerflow-unified-project-v2';
+const VARIANT_COLORS = ['#38bdf8', '#f59e0b', '#34d399', '#a78bfa', '#fb7185'];
+
+interface ProjectSnapshot {
+  entities: StudioEntity[];
+  joints: StudioJoint[];
+  cadParts: CadPartConfig[];
+  parameters: ProjectParameter[];
+}
+
+function loadAutosavedProject(): {
+  activePhysicsPresetId?: string;
+  entities?: StudioEntity[];
+  joints?: StudioJoint[];
+  cadParts?: CadPartConfig[];
+  parameters?: ProjectParameter[];
+  designRuns?: DesignExperimentRun[];
+  gravity?: Vec3;
+} | null {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    const raw = window.localStorage.getItem(AUTOSAVE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed?.format !== AUTOSAVE_KEY || !Array.isArray(parsed.entities)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 export const App: React.FC = () => {
   const physicsPresets = useMemo(() => getPhysicsPresets(), []);
   const initialPreset = physicsPresets[0];
+  const savedProj = useMemo(() => loadAutosavedProject(), []);
 
   const [mode, setMode] = useState<StudioMode>('physics');
   const [running, setRunning] = useState(false);
   const [timeScale, setTimeScale] = useState(1.0);
-  const [gravity, setGravity] = useState<Vec3>([0, -9.81, 0]);
+  const [gravity, setGravity] = useState<Vec3>(() => savedProj?.gravity ?? [0, -9.81, 0]);
   const [fps, setFps] = useState(60);
   const [simTime, setSimTime] = useState(0);
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('translate');
@@ -166,20 +208,46 @@ export const App: React.FC = () => {
   const [videoElapsedSec, setVideoElapsedSec] = useState(0);
   const videoRecorderRef = useRef<CanvasVideoRecorder>(new CanvasVideoRecorder());
 
-  // Physics State
-  const [activePhysicsPresetId, setActivePhysicsPresetId] = useState(initialPreset.id);
+  // Physics & Unified Project State
+  const [activePhysicsPresetId, setActivePhysicsPresetId] = useState(
+    () => savedProj?.activePhysicsPresetId ?? initialPreset.id
+  );
   const [entities, setEntities] = useState<StudioEntity[]>(() =>
-    structuredClone(initialPreset.entities)
+    savedProj?.entities ? structuredClone(savedProj.entities) : structuredClone(initialPreset.entities)
   );
   const [joints, setJoints] = useState<StudioJoint[]>(() =>
-    structuredClone(initialPreset.joints)
+    savedProj?.joints ? structuredClone(savedProj.joints) : structuredClone(initialPreset.joints)
   );
   const [selectedId, setSelectedId] = useState<string | null>(
-    initialPreset.entities[1]?.id ?? null
+    () =>
+      (savedProj?.entities ?? initialPreset.entities).find((e) => e.bodyType === 'dynamic')?.id ??
+      initialPreset.entities[0]?.id ??
+      null
   );
+  const [parameters, setParameters] = useState<ProjectParameter[]>(() =>
+    savedProj?.parameters
+      ? structuredClone(savedProj.parameters)
+      : getDefaultParametersForPreset(
+          initialPreset.id,
+          initialPreset.entities,
+          initialPreset.joints
+        )
+  );
+  const [checkpoints, setCheckpoints] = useState<SimulationCheckpoint[]>([]);
+  const [snapToGrid, setSnapToGrid] = useState(false);
+  const [measureTargetId, setMeasureTargetId] = useState<string | null>(null);
+  const [designRuns, setDesignRuns] = useState<DesignExperimentRun[]>(
+    () => savedProj?.designRuns ?? []
+  );
+  const [autosavedAt, setAutosavedAt] = useState<string | null>(null);
+  const [undoStack, setUndoStack] = useState<ProjectSnapshot[]>([]);
+  const [redoStack, setRedoStack] = useState<ProjectSnapshot[]>([]);
+  const lastHistoryTsRef = useRef(0);
 
   // CAD State + 2D<->3D & Design Code
-  const [cadParts, setCadParts] = useState<CadPartConfig[]>(() => createDefaultCadParts());
+  const [cadParts, setCadParts] = useState<CadPartConfig[]>(() =>
+    savedProj?.cadParts ? structuredClone(savedProj.cadParts) : createDefaultCadParts()
+  );
   const [blueprintProjection, setBlueprintProjection] = useState<BlueprintProjection | null>(null);
   const [designCode, setDesignCode] = useState<string>(DESIGN_CODE_TEMPLATES[0].code);
   const [designCodeError, setDesignCodeError] = useState<string | null>(null);
@@ -511,9 +579,47 @@ export const App: React.FC = () => {
       },
       onTransformObject: (id, kind, pos, rot, scale) => {
         if (kind === 'physics') {
-          setEntities((prev) =>
-            prev.map((e) => (e.id === id ? { ...e, position: pos, rotation: rot, scale } : e))
-          );
+          const snapshotList = entitiesRef.current;
+          const orig = snapshotList.find((e) => e.id === id);
+          const dx = orig ? pos[0] - orig.position[0] : 0;
+          const dy = orig ? pos[1] - orig.position[1] : 0;
+          const dz = orig ? pos[2] - orig.position[2] : 0;
+
+          const descendants = new Set<string>();
+          if (orig && (Math.abs(dx) > 1e-6 || Math.abs(dy) > 1e-6 || Math.abs(dz) > 1e-6)) {
+            let added = true;
+            while (added) {
+              added = false;
+              for (const item of snapshotList) {
+                if (
+                  item.parentId &&
+                  (item.parentId === id || descendants.has(item.parentId)) &&
+                  !descendants.has(item.id)
+                ) {
+                  descendants.add(item.id);
+                  added = true;
+                }
+              }
+            }
+          }
+
+          const updated = snapshotList.map((e) => {
+            if (e.id === id) return { ...e, position: pos, rotation: rot, scale };
+            if (descendants.has(e.id)) {
+              const childPos: Vec3 = [e.position[0] + dx, e.position[1] + dy, e.position[2] + dz];
+              if (!runningRef.current) {
+                const q = new THREE.Quaternion().setFromEuler(
+                  new THREE.Euler(e.rotation[0], e.rotation[1], e.rotation[2], 'XYZ')
+                );
+                vp.updateEntityTransform(e.id, childPos, [q.x, q.y, q.z, q.w]);
+                rapierRef.current.setKinematicTarget(e.id, childPos, e.rotation);
+              }
+              return { ...e, position: childPos };
+            }
+            return e;
+          });
+          setEntities(updated);
+
           if (!runningRef.current) {
             rapierRef.current.setKinematicTarget(id, pos, rot);
             vp.updateJointDebug(rapierRef.current.getJointWorldSegments());
@@ -780,11 +886,128 @@ export const App: React.FC = () => {
     if (modeRef.current === 'cad') refreshStats('cad');
   }, [cadParts, refreshStats]);
 
+  useEffect(() => {
+    viewportRef.current?.setSnapToGrid(snapToGrid);
+  }, [snapToGrid]);
+
+  const inspectionMetrics = useMemo(
+    () => inspectEntities(entities, selectedId, measureTargetId),
+    [entities, selectedId, measureTargetId]
+  );
+
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    if (mode !== 'physics' || !selectedId || !measureTargetId) {
+      vp.updateMeasurementOverlay(null, null);
+      return;
+    }
+    const a = entities.find((e) => e.id === selectedId);
+    const b = entities.find((e) => e.id === measureTargetId);
+    vp.updateMeasurementOverlay(a && b ? a.position : null, a && b ? b.position : null);
+  }, [mode, entities, selectedId, measureTargetId]);
+
+  // Client-side Autosave & Recovery
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try {
+        if (typeof window === 'undefined' || !window.localStorage) return;
+        const payload = {
+          format: AUTOSAVE_KEY,
+          activePhysicsPresetId,
+          gravity,
+          entities,
+          joints,
+          cadParts,
+          parameters,
+          designRuns,
+        };
+        window.localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(payload));
+        setAutosavedAt(
+          new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        );
+      } catch {
+        // Ignore storage quota issues
+      }
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [activePhysicsPresetId, gravity, entities, joints, cadParts, parameters, designRuns]);
+
+  const pushHistorySnapshot = useCallback(
+    (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastHistoryTsRef.current < 650) return;
+      lastHistoryTsRef.current = now;
+      const snap: ProjectSnapshot = {
+        entities: structuredClone(entities),
+        joints: structuredClone(joints),
+        cadParts: structuredClone(cadParts),
+        parameters: structuredClone(parameters),
+      };
+      setUndoStack((prev) => [...prev.slice(-24), snap]);
+      setRedoStack([]);
+    },
+    [entities, joints, cadParts, parameters]
+  );
+
+  const handleUndo = useCallback(() => {
+    setUndoStack((prev) => {
+      if (prev.length === 0) return prev;
+      const target = prev[prev.length - 1];
+      const currentSnap: ProjectSnapshot = {
+        entities: structuredClone(entities),
+        joints: structuredClone(joints),
+        cadParts: structuredClone(cadParts),
+        parameters: structuredClone(parameters),
+      };
+      setRedoStack((r) => [...r.slice(-24), currentSnap]);
+      setEntities(target.entities);
+      setJoints(target.joints);
+      setCadParts(target.cadParts);
+      setParameters(target.parameters);
+      setRunning(false);
+      void syncPhysicsWorldAndViewport(target.entities, target.joints, gravity);
+      return prev.slice(0, -1);
+    });
+  }, [entities, joints, cadParts, parameters, gravity, syncPhysicsWorldAndViewport]);
+
+  const handleRedo = useCallback(() => {
+    setRedoStack((prev) => {
+      if (prev.length === 0) return prev;
+      const target = prev[prev.length - 1];
+      const currentSnap: ProjectSnapshot = {
+        entities: structuredClone(entities),
+        joints: structuredClone(joints),
+        cadParts: structuredClone(cadParts),
+        parameters: structuredClone(parameters),
+      };
+      setUndoStack((u) => [...u.slice(-24), currentSnap]);
+      setEntities(target.entities);
+      setJoints(target.joints);
+      setCadParts(target.cadParts);
+      setParameters(target.parameters);
+      setRunning(false);
+      void syncPhysicsWorldAndViewport(target.entities, target.joints, gravity);
+      return prev.slice(0, -1);
+    });
+  }, [entities, joints, cadParts, parameters, gravity, syncPhysicsWorldAndViewport]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) handleRedo();
+        else handleUndo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        handleRedo();
+        return;
+      }
       if (e.code === 'Space') {
         e.preventDefault();
         setRunning((r) => !r);
@@ -800,7 +1023,7 @@ export const App: React.FC = () => {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [handleUndo, handleRedo]);
 
   const handleModeChange = (nextMode: StudioMode) => {
     setMode(nextMode);
@@ -824,26 +1047,36 @@ export const App: React.FC = () => {
     }
   };
 
-  // Physics actions
+  // Physics & Unified Project actions
   const handleLoadPhysicsPreset = (presetId: string) => {
     const p = physicsPresets.find((x) => x.id === presetId);
     if (!p) return;
+    pushHistorySnapshot(true);
     setRunning(false);
     setActivePhysicsPresetId(p.id);
     scriptStepCallbackRef.current = null;
     customMetricsRef.current = {};
     const clonedEnts = structuredClone(p.entities);
     const clonedJoints = structuredClone(p.joints);
-    setEntities(clonedEnts);
-    setJoints(clonedJoints);
-    setSelectedId(clonedEnts[0]?.id ?? null);
-    void syncPhysicsWorldAndViewport(clonedEnts, clonedJoints, gravity);
+    const nextParams = getDefaultParametersForPreset(p.id, clonedEnts, clonedJoints);
+    const evalRes = evaluateProjectParameters(nextParams, clonedEnts, clonedJoints);
+    setEntities(evalRes.entities);
+    setJoints(evalRes.joints);
+    setParameters(evalRes.parameters);
+    setCheckpoints([]);
+    setDesignRuns([]);
+    setMeasureTargetId(null);
+    setSelectedId(
+      evalRes.entities.find((e) => e.bodyType === 'dynamic')?.id ?? evalRes.entities[0]?.id ?? null
+    );
+    void syncPhysicsWorldAndViewport(evalRes.entities, evalRes.joints, gravity);
   };
 
   const handleAddPhysicsEntity = (shape: ShapeKind) => {
+    pushHistorySnapshot(true);
     const idx = entities.length + 1;
     const colors = ['#38bdf8', '#f59e0b', '#34d399', '#a78bfa', '#fb7185'];
-    const ent: StudioEntity = {
+    const rawEnt: StudioEntity = {
       id: `body-${shape}-${Date.now()}`,
       name: `${shape.charAt(0).toUpperCase() + shape.slice(1)} ${idx}`,
       category: 'physics',
@@ -858,6 +1091,8 @@ export const App: React.FC = () => {
       roughness: 0.38,
       opacity: 1,
       visible: true,
+      density: 2700,
+      materialPreset: 'aluminum',
       physics: {
         mass: 1.5,
         friction: 0.5,
@@ -867,6 +1102,7 @@ export const App: React.FC = () => {
         initialVelocity: [0, 0, 0],
       },
     };
+    const ent = syncEntityPhysicalMass(rawEnt);
     const next = [...entities, ent];
     setEntities(next);
     setSelectedId(ent.id);
@@ -874,7 +1110,42 @@ export const App: React.FC = () => {
   };
 
   const handleUpdateEntity = (id: string, patch: Partial<StudioEntity>) => {
-    const next = entities.map((e) => (e.id === id ? { ...e, ...patch } : e));
+    pushHistorySnapshot();
+    const orig = entities.find((e) => e.id === id);
+    const nextPos = patch.position;
+    let next = entities.map((e) => (e.id === id ? { ...e, ...patch } : e));
+
+    if (orig && nextPos) {
+      const dx = nextPos[0] - orig.position[0];
+      const dy = nextPos[1] - orig.position[1];
+      const dz = nextPos[2] - orig.position[2];
+      if (Math.abs(dx) > 1e-6 || Math.abs(dy) > 1e-6 || Math.abs(dz) > 1e-6) {
+        const descendants = new Set<string>();
+        let added = true;
+        while (added) {
+          added = false;
+          for (const item of next) {
+            if (
+              item.parentId &&
+              (item.parentId === id || descendants.has(item.parentId)) &&
+              !descendants.has(item.id)
+            ) {
+              descendants.add(item.id);
+              added = true;
+            }
+          }
+        }
+        next = next.map((e) =>
+          descendants.has(e.id)
+            ? {
+                ...e,
+                position: [e.position[0] + dx, e.position[1] + dy, e.position[2] + dz],
+              }
+            : e
+        );
+      }
+    }
+
     setEntities(next);
     if (!running) {
       void syncPhysicsWorldAndViewport(next, joints, gravity);
@@ -882,14 +1153,140 @@ export const App: React.FC = () => {
   };
 
   const handleToggleEntityVisible = (id: string) => {
+    pushHistorySnapshot(true);
     const next = entities.map((e) => (e.id === id ? { ...e, visible: !e.visible } : e));
     setEntities(next);
     void syncPhysicsWorldAndViewport(next, joints, gravity);
   };
 
+  const handleToggleEntityLocked = (id: string) => {
+    pushHistorySnapshot(true);
+    const next = entities.map((e) => (e.id === id ? { ...e, locked: !e.locked } : e));
+    setEntities(next);
+    viewportRef.current?.syncPhysicsEntities(next);
+  };
+
+  const handleAlignEntity = (entityId: string, targetId: string | null, snapMode: SnapMode) => {
+    const entA = entities.find((e) => e.id === entityId);
+    if (!entA) return;
+    const ext = (e: StudioEntity): Vec3 => {
+      const w =
+        e.shape === 'sphere' || e.shape === 'cylinder' || e.shape === 'capsule' || e.shape === 'cone'
+          ? e.size.radius * 2
+          : e.size.width;
+      const h = e.shape === 'sphere' ? e.size.radius * 2 : e.size.height;
+      const d =
+        e.shape === 'sphere' || e.shape === 'cylinder' || e.shape === 'capsule' || e.shape === 'cone'
+          ? e.size.radius * 2
+          : e.size.depth;
+      return [
+        w * Math.abs(e.scale[0]),
+        h * Math.abs(e.scale[1]),
+        d * Math.abs(e.scale[2]),
+      ];
+    };
+    const sA = ext(entA);
+    const entB = targetId ? entities.find((e) => e.id === targetId) ?? null : null;
+    if (snapMode === 'ground' || !entB) {
+      handleUpdateEntity(entityId, {
+        position: [entA.position[0], Math.max(0.05, sA[1] * 0.5), entA.position[2]],
+      });
+      return;
+    }
+    const sB = ext(entB);
+    const [bx, by, bz] = entB.position;
+    let nextPos: Vec3 = [bx, by, bz];
+    if (snapMode === 'onTop') nextPos = [bx, by + sB[1] * 0.5 + sA[1] * 0.5, bz];
+    else if (snapMode === 'toRight') nextPos = [bx + sB[0] * 0.5 + sA[0] * 0.5, by, bz];
+    else if (snapMode === 'inFront') nextPos = [bx, by, bz + sB[2] * 0.5 + sA[2] * 0.5];
+    handleUpdateEntity(entityId, { position: nextPos });
+  };
+
+  const handleSyncCadPartToPhysics = (cadPartId: string) => {
+    const part = cadParts.find((p) => p.id === cadPartId);
+    if (!part) return;
+    pushHistorySnapshot(true);
+    const geom = createParametricGeometry(part);
+    const serialized = serializeBufferGeometry(geom);
+    geom.dispose();
+
+    const ent = syncEntityPhysicalMass({
+      id: `cad-live-${part.id}-${Date.now()}`,
+      name: part.name,
+      category: 'cad',
+      cadLinkId: part.id,
+      shape: 'custom',
+      bodyType: 'dynamic',
+      position: [part.position[0], Math.max(1.8, part.position[1]), part.position[2]],
+      rotation: [...part.rotation],
+      scale: [1, 1, 1],
+      size: { width: part.width, height: part.height, depth: part.depth, radius: part.outerRadius },
+      color: part.color,
+      metalness: 0.4,
+      roughness: 0.35,
+      opacity: 1,
+      visible: true,
+      density: 2700,
+      materialPreset: 'aluminum',
+      serializedMesh: serialized,
+      physics: {
+        mass: 2.2,
+        friction: 0.5,
+        restitution: 0.35,
+        linearDamping: 0.02,
+        angularDamping: 0.04,
+        initialVelocity: [0, 0, 0],
+        colliderKind: 'convexHull',
+      },
+    });
+    const next = [...entities, ent];
+    setEntities(next);
+    setSelectedId(ent.id);
+    setMode('physics');
+    void syncPhysicsWorldAndViewport(next, joints, gravity);
+  };
+
+  const handleUpdateParameter = (id: string, value: number) => {
+    pushHistorySnapshot();
+    const changedParam = parameters.find((p) => p.id === id);
+    const rawNext = parameters.map((p) => (p.id === id ? { ...p, value } : p));
+    const evalRes = evaluateProjectParameters(rawNext, entities, joints);
+    setParameters(evalRes.parameters);
+    setEntities(evalRes.entities);
+    setJoints(evalRes.joints);
+
+    if (
+      running &&
+      changedParam?.targetJointId &&
+      changedParam.targetJointField === 'motorSpeed'
+    ) {
+      const j = evalRes.joints.find((x) => x.id === changedParam.targetJointId);
+      if (j) {
+        rapierRef.current.updateJointMotor(j.id, j.motorSpeed, Math.max(12, j.motorMaxForce || 20));
+        return;
+      }
+    }
+
+    if (!running) {
+      void syncPhysicsWorldAndViewport(evalRes.entities, evalRes.joints, gravity);
+    } else {
+      viewportRef.current?.syncPhysicsEntities(evalRes.entities);
+      void rapierRef.current.rebuild(evalRes.entities, evalRes.joints, gravity);
+    }
+  };
+
+  const handleAddCustomParameter = (param: ProjectParameter) => {
+    pushHistorySnapshot(true);
+    const evalRes = evaluateProjectParameters([...parameters, param], entities, joints);
+    setParameters(evalRes.parameters);
+    setEntities(evalRes.entities);
+    setJoints(evalRes.joints);
+  };
+
   const handleDuplicateEntity = (id: string) => {
     const orig = entities.find((e) => e.id === id);
     if (!orig) return;
+    pushHistorySnapshot(true);
     const copy = structuredClone(orig);
     copy.id = `copy-${Date.now()}`;
     copy.name = `${orig.name} Copy`;
@@ -901,12 +1298,71 @@ export const App: React.FC = () => {
   };
 
   const handleDeleteEntity = (id: string) => {
+    pushHistorySnapshot(true);
     const nextEnts = entities.filter((e) => e.id !== id);
     const nextJoints = joints.filter((j) => j.bodyA !== id && j.bodyB !== id);
     setEntities(nextEnts);
     setJoints(nextJoints);
     if (selectedId === id) setSelectedId(nextEnts[0]?.id ?? null);
     void syncPhysicsWorldAndViewport(nextEnts, nextJoints, gravity);
+  };
+
+  const handleSaveCheckpoint = () => {
+    if (!rapierRef.current.isReady) return;
+    const snap: SimulationCheckpoint = {
+      id: `cp-${Date.now()}`,
+      label: `CP${checkpoints.length + 1}`,
+      simTime: rapierRef.current.time,
+      createdAt: new Date().toISOString(),
+      bodyStates: rapierRef.current.captureSnapshots(),
+      parameters: structuredClone(parameters),
+    };
+    setCheckpoints((prev) => [...prev.slice(-7), snap]);
+  };
+
+  const handleRestoreCheckpoint = async (cpId: string) => {
+    const cp = checkpoints.find((c) => c.id === cpId);
+    if (!cp) return;
+    setRunning(false);
+    setPlaybackIndex(null);
+    const evalRes = evaluateProjectParameters(structuredClone(cp.parameters), entities, joints);
+    setParameters(evalRes.parameters);
+    setEntities(evalRes.entities);
+    setJoints(evalRes.joints);
+    await rapierRef.current.rebuild(evalRes.entities, evalRes.joints, gravity);
+    rapierRef.current.restoreSnapshots(cp.bodyStates, cp.simTime);
+
+    const vp = viewportRef.current;
+    if (vp) {
+      vp.syncPhysicsEntities(evalRes.entities);
+      for (const ent of evalRes.entities) {
+        const tr = rapierRef.current.getBodyTransform(ent.id);
+        if (tr) vp.updateEntityTransform(ent.id, tr.position, tr.quaternion);
+      }
+      vp.updateJointDebug(rapierRef.current.getJointWorldSegments());
+    }
+    setSimTime(cp.simTime);
+  };
+
+  const handleDeleteCheckpoint = (cpId: string) => {
+    setCheckpoints((prev) => prev.filter((c) => c.id !== cpId));
+  };
+
+  const handleRunDesignVariant = async () => {
+    const idx = designRuns.length;
+    const label = `Design ${String.fromCharCode(65 + (idx % 26))}`;
+    const color = VARIANT_COLORS[idx % VARIANT_COLORS.length];
+    const run = await runDesignVariantExperiment({
+      label,
+      color,
+      entities,
+      joints,
+      gravity,
+      parameters,
+      durationSec: 3.0,
+    });
+    setDesignRuns((prev) => [...prev, run]);
+    setTelemetryOpen(true);
   };
 
   const handleAddJoint = (j: StudioJoint) => {
@@ -1532,6 +1988,13 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleStepBack = () => {
+    if (recordedFrames.length === 0) return;
+    const curr = playbackIndex ?? recordedFrames.length - 1;
+    const nextIdx = Math.max(0, curr - 1);
+    handleScrubFrame(nextIdx);
+  };
+
   const handleGravityChange = (g: Vec3) => {
     setGravity(g);
     rapierRef.current.setGravity(g);
@@ -1551,6 +2014,8 @@ export const App: React.FC = () => {
       softConfig,
       experimentScript,
       logoConfig,
+      parameters,
+      designRuns,
     };
     exportSceneJSON(file, 'outerflow-project.outerflow.json');
   };
@@ -1558,6 +2023,7 @@ export const App: React.FC = () => {
   const handleLoadScene = async (file: File) => {
     const text = await file.text();
     const parsed = parseSceneJSON(text);
+    pushHistorySnapshot(true);
     setRunning(false);
     setMode(parsed.mode);
     setGravity(parsed.gravity);
@@ -1567,6 +2033,8 @@ export const App: React.FC = () => {
     setMathConfig(parsed.mathConfig);
     setSoftConfig(parsed.softConfig);
     setExperimentScript(parsed.experimentScript);
+    if (parsed.parameters) setParameters(parsed.parameters);
+    if (parsed.designRuns) setDesignRuns(parsed.designRuns);
     if (parsed.logoConfig) setLogoConfig(parsed.logoConfig);
     void syncPhysicsWorldAndViewport(parsed.entities, parsed.joints, parsed.gravity);
     rebuildMathViewport(parsed.mathConfig);
@@ -1654,6 +2122,11 @@ export const App: React.FC = () => {
         onToggleTelemetry={() => setTelemetryOpen((o) => !o)}
         zenMode={zenMode}
         onToggleZenMode={handleToggleZenMode}
+        canUndo={undoStack.length > 0}
+        canRedo={redoStack.length > 0}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        autosavedAt={autosavedAt}
         videoRecording={videoRecording}
         videoElapsedSec={videoElapsedSec}
         onToggleVideoRecord={() => void handleToggleVideoRecord()}
@@ -1700,8 +2173,18 @@ export const App: React.FC = () => {
             onSelect={setSelectedId}
             onAddPhysicsEntity={handleAddPhysicsEntity}
             onToggleEntityVisible={handleToggleEntityVisible}
+            onToggleEntityLocked={handleToggleEntityLocked}
             onDuplicateEntity={handleDuplicateEntity}
             onDeleteEntity={handleDeleteEntity}
+            onSyncCadPartToPhysics={handleSyncCadPartToPhysics}
+            checkpoints={checkpoints}
+            onSaveCheckpoint={handleSaveCheckpoint}
+            onRestoreCheckpoint={(cpId) => void handleRestoreCheckpoint(cpId)}
+            onDeleteCheckpoint={handleDeleteCheckpoint}
+            canUndo={undoStack.length > 0}
+            canRedo={redoStack.length > 0}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
             cadParts={cadParts}
             onAddCadPart={handleAddCadPart}
             onAddLibraryPart={handleAddLibraryPart}
@@ -1799,6 +2282,7 @@ export const App: React.FC = () => {
                 });
               }}
               onStep={handleStep}
+              onStepBack={handleStepBack}
               onReset={handleReset}
               timeScale={timeScale}
               onTimeScaleChange={setTimeScale}
@@ -1809,6 +2293,9 @@ export const App: React.FC = () => {
               recordedFramesCount={recordedFrames.length}
               playbackIndex={playbackIndex}
               onScrubFrame={handleScrubFrame}
+              checkpoints={checkpoints}
+              onSaveCheckpoint={handleSaveCheckpoint}
+              onRestoreCheckpoint={(cpId) => void handleRestoreCheckpoint(cpId)}
             />
           </div>
 
@@ -1817,6 +2304,9 @@ export const App: React.FC = () => {
             onClose={() => setTelemetryOpen(false)}
             samples={telemetrySamples}
             sweepResults={sweepResults}
+            designRuns={designRuns}
+            onRunDesignVariant={() => void handleRunDesignVariant()}
+            onClearDesignRuns={() => setDesignRuns([])}
             onClearTelemetry={() => setTelemetrySamples([])}
             onExportTelemetryCSV={() => exportTelemetryCSV(telemetrySamples)}
             onExportSweepCSV={() => exportSweepCSV(sweepResults)}
@@ -1845,6 +2335,18 @@ export const App: React.FC = () => {
             }}
             onAddJoint={handleAddJoint}
             onDeleteJoint={handleDeleteJoint}
+            parameters={parameters}
+            onUpdateParameter={handleUpdateParameter}
+            onAddCustomParameter={handleAddCustomParameter}
+            snapToGrid={snapToGrid}
+            onToggleSnapToGrid={setSnapToGrid}
+            onAlignEntity={handleAlignEntity}
+            measureTargetId={measureTargetId}
+            onMeasureTargetChange={setMeasureTargetId}
+            inspectionMetrics={inspectionMetrics}
+            designRuns={designRuns}
+            onRunDesignVariant={() => void handleRunDesignVariant()}
+            onClearDesignRuns={() => setDesignRuns([])}
             cadParts={cadParts}
             selectedCadPart={selectedCadPart}
             onUpdateCadPart={handleUpdateCadPart}
