@@ -142,7 +142,6 @@ import { TopBar } from './components/TopBar';
 import { LeftPanel } from './components/LeftPanel';
 import { RightPanel } from './components/RightPanel';
 import { ViewportHUD } from './components/ViewportHUD';
-import { TransportBar } from './components/TransportBar';
 import { TelemetryDrawer } from './components/TelemetryDrawer';
 import { ScriptConsoleDrawer } from './components/ScriptConsoleDrawer';
 import { ElectronicsSchematicView } from './components/ElectronicsSchematicView';
@@ -1946,52 +1945,6 @@ export const App: React.FC = () => {
     softRuntimeRef.current.wave?.syncMesh(next.colormap);
   };
 
-  // Preset Cycler (< and > arrows in viewport)
-  const handleCyclePreset = (dir: -1 | 1) => {
-    if (mode === 'physics') {
-      const idx = physicsPresets.findIndex((p) => p.id === activePhysicsPresetId);
-      const nextIdx = (idx + dir + physicsPresets.length) % physicsPresets.length;
-      handleLoadPhysicsPreset(physicsPresets[nextIdx].id);
-    } else if (mode === 'math') {
-      const k = mathConfig.activeKind;
-      const list =
-        k === 'parametric'
-          ? PARAMETRIC_PRESETS
-          : k === 'explicit'
-          ? EXPLICIT_PRESETS
-          : k === 'implicit'
-          ? IMPLICIT_PRESETS
-          : k === 'ode'
-          ? ODE_PRESETS
-          : VECTOR_FIELD_PRESETS;
-      const currId = mathConfig[k].presetId;
-      const idx = list.findIndex((p) => p.id === currId);
-      const nextIdx = (idx + dir + list.length) % list.length;
-      handleSelectMathPreset(k, list[nextIdx].id);
-    } else if (mode === 'soft') {
-      const kinds: SoftSimKind[] = ['particles', 'cloth', 'sphFluid', 'waveTank'];
-      const idx = kinds.indexOf(softConfig.activeKind);
-      const nextIdx = (idx + dir + kinds.length) % kinds.length;
-      handleSoftKindChange(kinds[nextIdx]);
-    } else if (mode === 'mesh') {
-      const sculptPresets: SculptBasePreset[] = [
-        'humanHead',
-        'sphere',
-        'organicPod',
-        'torus',
-        'cube',
-        'terrain',
-      ];
-      const idx = sculptPresets.indexOf(meshConfig.basePreset);
-      const nextIdx = (idx + dir + sculptPresets.length) % sculptPresets.length;
-      handleSelectSculptPreset(sculptPresets[nextIdx]);
-    } else if (mode === 'electronics') {
-      const idx = circuitPresets.findIndex((c) => c.id === circuit.id);
-      const nextIdx = (idx + dir + circuitPresets.length) % circuitPresets.length;
-      handleLoadCircuitPreset(circuitPresets[nextIdx].id);
-    }
-  };
-
   // Programmable Engineering & Experiments script execution
   const handleRunExperimentScript = (codeOverride?: string) => {
     const codeToRun = typeof codeOverride === 'string' ? codeOverride : experimentScript;
@@ -2412,9 +2365,29 @@ export const App: React.FC = () => {
               onToggleTelemetry={() => setTelemetryOpen((o) => !o)}
               onToggleRun={() => {
                 setPlaybackIndex(null);
-                setRunning((r) => !r);
+                setRunning((r) => {
+                  const next = !r;
+                  if (next && stage.explodedView) {
+                    setStage((s) => ({ ...s, explodedView: false }));
+                  }
+                  return next;
+                });
               }}
+              onStep={handleStep}
+              onStepBack={handleStepBack}
               onResetSim={handleReset}
+              timeScale={timeScale}
+              onTimeScaleChange={setTimeScale}
+              gravity={gravity}
+              onGravityChange={handleGravityChange}
+              recording={recording}
+              onToggleRecord={() => setRecording((r) => !r)}
+              recordedFramesCount={recordedFrames.length}
+              playbackIndex={playbackIndex}
+              onScrubFrame={handleScrubFrame}
+              checkpoints={checkpoints}
+              onSaveCheckpoint={handleSaveCheckpoint}
+              onRestoreCheckpoint={(cpId) => void handleRestoreCheckpoint(cpId)}
               onNewBlankProject={handleNewBlankProject}
               onSpawnLibraryPart={(partId) => {
                 const foundMeta = PART_LIBRARY.find((p) => p.id === partId);
@@ -2443,7 +2416,6 @@ export const App: React.FC = () => {
               }
               onCameraPreset={(p: CameraPreset) => viewportRef.current?.setCameraPreset(p)}
               onFocusSelected={() => viewportRef.current?.focusSelected()}
-              onCyclePreset={handleCyclePreset}
               telemetryOpen={telemetryOpen}
               onToggleTelemetry={() => setTelemetryOpen((o) => !o)}
               zenMode={zenMode}
@@ -2474,36 +2446,6 @@ export const App: React.FC = () => {
                 onNewBlankProject={handleNewBlankProject}
               />
             )}
-
-            <TransportBar
-              simTime={simTime}
-              running={running}
-              onToggleRun={() => {
-                setPlaybackIndex(null);
-                setRunning((r) => {
-                  const next = !r;
-                  if (next && stage.explodedView) {
-                    setStage((s) => ({ ...s, explodedView: false }));
-                  }
-                  return next;
-                });
-              }}
-              onStep={handleStep}
-              onStepBack={handleStepBack}
-              onReset={handleReset}
-              timeScale={timeScale}
-              onTimeScaleChange={setTimeScale}
-              gravity={gravity}
-              onGravityChange={handleGravityChange}
-              recording={recording}
-              onToggleRecord={() => setRecording((r) => !r)}
-              recordedFramesCount={recordedFrames.length}
-              playbackIndex={playbackIndex}
-              onScrubFrame={handleScrubFrame}
-              checkpoints={checkpoints}
-              onSaveCheckpoint={handleSaveCheckpoint}
-              onRestoreCheckpoint={(cpId) => void handleRestoreCheckpoint(cpId)}
-            />
           </div>
 
           <ScriptConsoleDrawer

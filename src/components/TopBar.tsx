@@ -4,16 +4,20 @@ import {
   Atom,
   Box,
   CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Code2,
   Cpu,
   Download,
-  Film,
   FilePlus2,
+  Film,
   FlaskConical,
   GitBranch,
   Grid3x3,
   Maximize2,
   Minimize2,
+  MoreHorizontal,
   PenTool,
   Redo2,
   RotateCcw,
@@ -63,12 +67,12 @@ interface TopBarProps {
 const MODES: { id: StudioMode; label: string; icon: React.ReactNode }[] = [
   { id: 'physics', label: 'Physics', icon: <Atom size={13} /> },
   { id: 'cad', label: 'CAD & Parts', icon: <Box size={13} /> },
-  { id: 'mesh', label: 'Mesh', icon: <PenTool size={13} /> },
+  { id: 'mesh', label: 'Mesh Sculpt', icon: <PenTool size={13} /> },
   { id: 'electronics', label: 'Electronics', icon: <Cpu size={13} /> },
-  { id: 'math', label: 'Math', icon: <Sigma size={13} /> },
-  { id: 'soft', label: 'Soft', icon: <Waves size={13} /> },
+  { id: 'math', label: 'Mathematics', icon: <Sigma size={13} /> },
+  { id: 'soft', label: 'Soft & Fluid', icon: <Waves size={13} /> },
   { id: 'system', label: 'System Graph', icon: <GitBranch size={13} /> },
-  { id: 'experiments', label: 'Lab', icon: <FlaskConical size={13} /> },
+  { id: 'experiments', label: 'Lab & Sweeps', icon: <FlaskConical size={13} /> },
 ];
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -104,12 +108,25 @@ export const TopBar: React.FC<TopBarProps> = ({
   onCaptureTransparentPNG,
   onPrintSheet,
 }) => {
-  const [exportOpen, setExportOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [modeListOpen, setModeListOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const activeIdx = Math.max(
+    0,
+    MODES.findIndex((m) => m.id === mode)
+  );
+  const activeModeMeta = MODES[activeIdx] ?? MODES[0];
+
+  const handleCycleMode = (dir: -1 | 1) => {
+    const nextIdx = (activeIdx + dir + MODES.length) % MODES.length;
+    onModeChange(MODES[nextIdx].id);
+  };
+
   return (
-    <header className="topbar">
-      <div className="topbar-left">
+    <header className="topbar-transparent">
+      {/* Left: Brand Identity */}
+      <div className="topbar-brand-zone">
         <button
           type="button"
           className="brand-chip-btn"
@@ -117,134 +134,187 @@ export const TopBar: React.FC<TopBarProps> = ({
           title="Open 3D Logo & Motion Studio"
         >
           <OuterflowMark
-            size={21}
+            size={20}
             primaryColor={logoConfig.primaryColor}
             secondaryColor={logoConfig.secondaryColor}
           />
           <span className="brand-name">OUTERFLOW</span>
           <span className="brand-sub hide-md">Harboria Labs</span>
         </button>
-
-        <nav className="mode-pills" aria-label="Studio Modes">
-          {MODES.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              className={`mode-pill ${mode === m.id ? 'active' : ''}`}
-              onClick={() => onModeChange(m.id)}
-            >
-              {m.icon}
-              <span>{m.label}</span>
-            </button>
-          ))}
-        </nav>
       </div>
 
-      <div className="topbar-actions">
-        {onNewBlankProject && (
-          <button
-            type="button"
-            className="top-btn hide-sm"
-            onClick={onNewBlankProject}
-            title="Start with an Empty Project (Section 2 Fundamental Construction Principle)"
-          >
-            <FilePlus2 size={13} />
-            <span className="hide-md">New Blank</span>
-          </button>
-        )}
-
-        <button
-          type="button"
-          className="top-btn hide-sm"
-          onClick={onReplayBootIntro}
-          title="Replay 3D Fluid Intro"
+      {/* Center: Two Separate Top Dynamic Islands */}
+      <div className="topbar-islands-center">
+        {/* TOP DYNAMIC ISLAND 1: Single-Mode Swappable Selector Pill */}
+        <div
+          className="top-dynamic-island mode-switcher-island"
+          aria-label="Workspace Mode Dynamic Island"
         >
-          <Sparkles size={13} />
-          <span className="hide-md">Intro</span>
-        </button>
+          <button
+            type="button"
+            className="island-swap-arrow"
+            onClick={() => handleCycleMode(-1)}
+            title="Previous Studio Workspace Mode"
+          >
+            <ChevronLeft size={13} />
+          </button>
 
-        <button
-          type="button"
-          className={`top-btn ${videoRecording ? 'rec-active' : ''}`}
-          onClick={onToggleVideoRecord}
-          title="Record 60fps 3D Viewport Video (.webm)"
+          <button
+            type="button"
+            className="island-active-mode-btn"
+            onClick={() => setModeListOpen((o) => !o)}
+            title="Click to pick workspace mode or use arrows to swap"
+          >
+            <span className="island-mode-icon">{activeModeMeta.icon}</span>
+            <span className="island-mode-label">{activeModeMeta.label}</span>
+            <span className="island-mode-index">
+              {activeIdx + 1}/{MODES.length}
+            </span>
+            <ChevronDown size={11} style={{ opacity: 0.7 }} />
+          </button>
+
+          <button
+            type="button"
+            className="island-swap-arrow"
+            onClick={() => handleCycleMode(1)}
+            title="Next Studio Workspace Mode"
+          >
+            <ChevronRight size={13} />
+          </button>
+
+          {modeListOpen && (
+            <div
+              className="island-mode-dropdown"
+              onMouseLeave={() => setModeListOpen(false)}
+            >
+              {MODES.map((m, idx) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={`dropdown-item ${m.id === mode ? 'active' : ''}`}
+                  onClick={() => {
+                    onModeChange(m.id);
+                    setModeListOpen(false);
+                  }}
+                >
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                    {m.icon}
+                    <span>{m.label}</span>
+                  </span>
+                  <span className="hierarchy-tag">0{idx + 1}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* TOP DYNAMIC ISLAND 2: Studio Action & Media Island (Intro, Undo, Redo, Record, Reset, Script IDE) */}
+        <div
+          className="top-dynamic-island actions-island"
+          aria-label="Studio Actions Dynamic Island"
         >
-          {videoRecording ? <span className="rec-dot" /> : <Film size={13} />}
-          <span className="hide-sm">
-            {videoRecording ? `Stop ${videoElapsedSec}s` : 'Rec Video'}
-          </span>
-        </button>
-
-        {onUndo && (
           <button
             type="button"
-            className="top-btn hide-md"
-            disabled={!canUndo}
-            onClick={onUndo}
-            title="Undo Project Edit (Ctrl+Z)"
-            style={{ opacity: canUndo ? 1 : 0.45 }}
+            className="island-action-btn"
+            onClick={onReplayBootIntro}
+            title="Replay 3D Fluid Intro"
           >
-            <Undo2 size={13} />
+            <Sparkles size={12} />
+            <span className="hide-md">Intro</span>
           </button>
-        )}
 
-        {onRedo && (
+          <span className="island-sep" />
+
+          {onUndo && (
+            <button
+              type="button"
+              className="island-action-btn"
+              disabled={!canUndo}
+              onClick={onUndo}
+              title="Undo Project Edit (Ctrl+Z)"
+              style={{ opacity: canUndo ? 1 : 0.4 }}
+            >
+              <Undo2 size={13} />
+            </button>
+          )}
+
+          {onRedo && (
+            <button
+              type="button"
+              className="island-action-btn"
+              disabled={!canRedo}
+              onClick={onRedo}
+              title="Redo Project Edit (Ctrl+Y)"
+              style={{ opacity: canRedo ? 1 : 0.4 }}
+            >
+              <Redo2 size={13} />
+            </button>
+          )}
+
+          <span className="island-sep" />
+
           <button
             type="button"
-            className="top-btn hide-md"
-            disabled={!canRedo}
-            onClick={onRedo}
-            title="Redo Project Edit (Ctrl+Y)"
-            style={{ opacity: canRedo ? 1 : 0.45 }}
+            className={`island-action-btn ${videoRecording ? 'rec-active' : ''}`}
+            onClick={onToggleVideoRecord}
+            title="Record 60fps 3D Viewport Video (.webm)"
           >
-            <Redo2 size={13} />
+            {videoRecording ? <span className="rec-dot" /> : <Film size={13} />}
+            <span className="hide-sm">
+              {videoRecording ? `${videoElapsedSec}s` : 'Rec'}
+            </span>
           </button>
-        )}
 
+          <button
+            type="button"
+            className="island-action-btn"
+            onClick={onResetSim}
+            title="Reset Active Simulation"
+          >
+            <RotateCcw size={13} />
+          </button>
+
+          {onToggleScript && (
+            <>
+              <span className="island-sep" />
+              <button
+                type="button"
+                className={`island-action-btn ${scriptOpen ? 'active' : ''}`}
+                onClick={onToggleScript}
+                title="Toggle Programmable Engineering Script IDE (JS / Python / C++)"
+              >
+                <Code2 size={13} />
+                <span className="hide-sm">IDE</span>
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Right: Integrated Page Status & Far-Right 3-Dots Menu */}
+      <div className="topbar-right-page-controls">
         {autosavedAt && (
           <span
-            className="top-btn hide-md"
+            className="page-status-chip hide-md"
             title={`Project autosaved locally at ${autosavedAt}`}
-            style={{ cursor: 'default', borderColor: 'transparent', color: '#34d399', padding: '0 6px' }}
           >
-            <CheckCircle2 size={12} />
-            <span style={{ fontSize: 10.5 }}>Autosaved</span>
+            <CheckCircle2 size={12} color="#34d399" />
+            <span>Autosaved</span>
           </span>
         )}
 
         <button
           type="button"
-          className="top-btn hide-sm"
-          onClick={onResetSim}
-          title="Reset Active Simulation"
-        >
-          <RotateCcw size={13} />
-        </button>
-
-        <button
-          type="button"
-          className={`top-btn hide-md ${stage.showGrid ? 'active' : ''}`}
+          className={`page-icon-btn ${stage.showGrid ? 'active' : ''}`}
           onClick={() => onStageChange({ ...stage, showGrid: !stage.showGrid })}
           title="Toggle Studio Floor Grid"
         >
           <Grid3x3 size={13} />
         </button>
 
-        {onToggleScript && (
-          <button
-            type="button"
-            className={`top-btn ${scriptOpen ? 'active' : ''}`}
-            onClick={onToggleScript}
-            title="Open Programmable Engineering Script IDE (CAD, Physics, Robotics & Workbench)"
-          >
-            <Code2 size={13} />
-            <span className="hide-sm">Script IDE</span>
-          </button>
-        )}
-
         <button
           type="button"
-          className={`top-btn hide-sm ${telemetryOpen ? 'active' : ''}`}
+          className={`page-icon-btn ${telemetryOpen ? 'active' : ''}`}
           onClick={onToggleTelemetry}
           title="Toggle Telemetry & Sweep Drawer"
         >
@@ -253,7 +323,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         <button
           type="button"
-          className={`top-btn ${zenMode ? 'active' : ''}`}
+          className={`page-icon-btn ${zenMode ? 'active' : ''}`}
           onClick={onToggleZenMode}
           title="Toggle Full-Bleed Viewport (Hide Sidebars)"
         >
@@ -272,36 +342,47 @@ export const TopBar: React.FC<TopBarProps> = ({
           }}
         />
 
+        {/* Far-Right 3-Dots Dropdown Menu (New Blank, Save, Load, Export GLB/STL/OBJ/PNG/PDF) */}
         <button
           type="button"
-          className="top-btn hide-md"
-          onClick={() => fileInputRef.current?.click()}
-          title="Load .outerflow.json scene"
+          className={`page-icon-btn three-dots-btn ${menuOpen ? 'active' : ''}`}
+          onClick={() => setMenuOpen((o) => !o)}
+          title="Project Menu: New Blank Project, Load, Save & Export 3D/Media"
+          aria-label="Project & Export Menu"
         >
-          <Upload size={13} />
+          <MoreHorizontal size={16} />
         </button>
 
-        <button
-          type="button"
-          className="top-btn primary"
-          onClick={() => setExportOpen((o) => !o)}
-          title="Save, Export Media/3D Print & Print Sheet"
-        >
-          <Download size={13} />
-          <span>Export</span>
-        </button>
-
-        {exportOpen && (
-          <div className="dropdown-menu" onMouseLeave={() => setExportOpen(false)}>
+        {menuOpen && (
+          <div className="dropdown-menu" onMouseLeave={() => setMenuOpen(false)}>
+            {onNewBlankProject && (
+              <button
+                type="button"
+                className="dropdown-item"
+                onClick={() => {
+                  onNewBlankProject();
+                  setMenuOpen(false);
+                }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <FilePlus2 size={12} color="#38bdf8" />
+                  <span>New Blank Project</span>
+                </span>
+                <span className="hierarchy-tag">empty</span>
+              </button>
+            )}
             <button
               type="button"
               className="dropdown-item"
               onClick={() => {
                 onSaveScene();
-                setExportOpen(false);
+                setMenuOpen(false);
               }}
             >
-              <span>Save Project</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <Download size={12} />
+                <span>Save Project</span>
+              </span>
               <span className="hierarchy-tag">.json</span>
             </button>
             <button
@@ -309,18 +390,30 @@ export const TopBar: React.FC<TopBarProps> = ({
               className="dropdown-item"
               onClick={() => {
                 fileInputRef.current?.click();
-                setExportOpen(false);
+                setMenuOpen(false);
               }}
             >
-              <span>Load Project</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <Upload size={12} />
+                <span>Load Project</span>
+              </span>
               <span className="hierarchy-tag">.json</span>
             </button>
+
+            <div
+              style={{
+                height: 1,
+                background: 'var(--border)',
+                margin: '3px 4px',
+              }}
+            />
+
             <button
               type="button"
               className="dropdown-item"
               onClick={() => {
                 onExportGLB();
-                setExportOpen(false);
+                setMenuOpen(false);
               }}
             >
               <span>Export 3D Scene</span>
@@ -331,7 +424,7 @@ export const TopBar: React.FC<TopBarProps> = ({
               className="dropdown-item"
               onClick={() => {
                 onExportSTL();
-                setExportOpen(false);
+                setMenuOpen(false);
               }}
             >
               <span>Export 3D Print Mesh</span>
@@ -342,7 +435,7 @@ export const TopBar: React.FC<TopBarProps> = ({
               className="dropdown-item"
               onClick={() => {
                 onExportOBJ();
-                setExportOpen(false);
+                setMenuOpen(false);
               }}
             >
               <span>Export Wavefront</span>
@@ -353,7 +446,7 @@ export const TopBar: React.FC<TopBarProps> = ({
               className="dropdown-item"
               onClick={() => {
                 onCapturePNG();
-                setExportOpen(false);
+                setMenuOpen(false);
               }}
             >
               <span>Snapshot Image</span>
@@ -364,7 +457,7 @@ export const TopBar: React.FC<TopBarProps> = ({
               className="dropdown-item"
               onClick={() => {
                 onCaptureTransparentPNG();
-                setExportOpen(false);
+                setMenuOpen(false);
               }}
             >
               <span>Transparent Image</span>
@@ -375,7 +468,7 @@ export const TopBar: React.FC<TopBarProps> = ({
               className="dropdown-item"
               onClick={() => {
                 onToggleVideoRecord();
-                setExportOpen(false);
+                setMenuOpen(false);
               }}
             >
               <span>{videoRecording ? 'Stop Video Recording' : 'Record 60fps Video'}</span>
@@ -386,22 +479,11 @@ export const TopBar: React.FC<TopBarProps> = ({
               className="dropdown-item"
               onClick={() => {
                 onPrintSheet();
-                setExportOpen(false);
+                setMenuOpen(false);
               }}
             >
               <span>Print / Save PDF Sheet</span>
               <span className="hierarchy-tag">print</span>
-            </button>
-            <button
-              type="button"
-              className="dropdown-item"
-              onClick={() => {
-                onOpenLogoStudio();
-                setExportOpen(false);
-              }}
-            >
-              <span>3D Logo &amp; Motion Studio</span>
-              <span className="hierarchy-tag">brand</span>
             </button>
           </div>
         )}

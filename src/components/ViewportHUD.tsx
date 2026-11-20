@@ -2,8 +2,6 @@ import React, { useRef, useState } from 'react';
 import {
   Activity,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   Crosshair,
   GripVertical,
   HelpCircle,
@@ -38,7 +36,7 @@ interface ViewportHUDProps {
   onSculptBrushChange: (b: SculptBrushKind) => void;
   onCameraPreset: (p: CameraPreset) => void;
   onFocusSelected: () => void;
-  onCyclePreset: (dir: -1 | 1) => void;
+  onCyclePreset?: (dir: -1 | 1) => void;
   telemetryOpen: boolean;
   onToggleTelemetry: () => void;
   zenMode: boolean;
@@ -75,7 +73,6 @@ export const ViewportHUD: React.FC<ViewportHUDProps> = ({
   onSculptBrushChange,
   onCameraPreset,
   onFocusSelected,
-  onCyclePreset,
   telemetryOpen,
   onToggleTelemetry,
   zenMode,
@@ -278,27 +275,6 @@ export const ViewportHUD: React.FC<ViewportHUDProps> = ({
           <Crosshair size={12} />
         </button>
       </div>
-
-      {(mode === 'physics' || mode === 'math' || mode === 'soft') && (
-        <>
-          <button
-            type="button"
-            className="viewport-nav-arrow left"
-            onClick={() => onCyclePreset(-1)}
-            title="Previous Preset"
-          >
-            <ChevronLeft size={15} />
-          </button>
-          <button
-            type="button"
-            className="viewport-nav-arrow right"
-            onClick={() => onCyclePreset(1)}
-            title="Next Preset"
-          >
-            <ChevronRight size={15} />
-          </button>
-        </>
-      )}
 
       <div className="hud-bottom-right">
         <button

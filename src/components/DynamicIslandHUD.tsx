@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import {
   Activity,
+  Bookmark,
   Box,
-  ChevronDown,
+  ChevronUp,
+  Circle,
   Code2,
   Command,
   FilePlus2,
@@ -12,8 +14,15 @@ import {
   RotateCcw,
   Search,
   Sparkles,
+  StepBack,
+  StepForward,
 } from 'lucide-react';
-import type { StudioMode, TelemetrySample } from '../types/studio';
+import type {
+  SimulationCheckpoint,
+  StudioMode,
+  TelemetrySample,
+  Vec3,
+} from '../types/studio';
 import {
   DISCIPLINE_META,
   UNIFIED_ELEMENT_REGISTRY,
@@ -36,10 +45,32 @@ interface DynamicIslandHUDProps {
   telemetryOpen: boolean;
   onToggleTelemetry: () => void;
   onToggleRun: () => void;
+  onStep: () => void;
+  onStepBack?: () => void;
   onResetSim: () => void;
+  timeScale: number;
+  onTimeScaleChange: (s: number) => void;
+  gravity: Vec3;
+  onGravityChange: (g: Vec3) => void;
+  recording: boolean;
+  onToggleRecord: () => void;
+  recordedFramesCount: number;
+  playbackIndex: number | null;
+  onScrubFrame: (idx: number | null) => void;
+  checkpoints?: SimulationCheckpoint[];
+  onSaveCheckpoint?: () => void;
+  onRestoreCheckpoint?: (cpId: string) => void;
   onNewBlankProject: () => void;
   onSpawnLibraryPart: (partId: string) => void;
   onAddSystemGraphElement: (def: UnifiedElementDefinition) => void;
+}
+
+const SPEED_OPTIONS = [0.5, 1, 2, 5];
+
+function formatClock(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
 export const DynamicIslandHUD: React.FC<DynamicIslandHUDProps> = ({
@@ -57,7 +88,21 @@ export const DynamicIslandHUD: React.FC<DynamicIslandHUDProps> = ({
   telemetryOpen,
   onToggleTelemetry,
   onToggleRun,
+  onStep,
+  onStepBack,
   onResetSim,
+  timeScale,
+  onTimeScaleChange,
+  gravity,
+  onGravityChange,
+  recording,
+  onToggleRecord,
+  recordedFramesCount,
+  playbackIndex,
+  onScrubFrame,
+  checkpoints = [],
+  onSaveCheckpoint,
+  onRestoreCheckpoint,
   onNewBlankProject,
   onSpawnLibraryPart,
   onAddSystemGraphElement,
@@ -65,7 +110,7 @@ export const DynamicIslandHUD: React.FC<DynamicIslandHUDProps> = ({
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState('');
 
-  // Global keyboard shortcut: Ctrl+K / Cmd+K toggles the Dynamic Island Command & Element Launcher
+  // Global keyboard shortcut: Ctrl+K / Cmd+K toggles the Bottom Dynamic Island Command & Element Launcher
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -78,6 +123,15 @@ export const DynamicIslandHUD: React.FC<DynamicIslandHUDProps> = ({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [expanded]);
+
+  const gravityKey =
+    Math.abs(gravity[1] + 9.81) < 0.05
+      ? 'earth'
+      : Math.abs(gravity[1] + 1.62) < 0.05
+      ? 'moon'
+      : Math.abs(gravity[1] + 3.72) < 0.05
+      ? 'mars'
+      : 'zerog';
 
   const q = query.trim().toLowerCase();
 
@@ -99,101 +153,12 @@ export const DynamicIslandHUD: React.FC<DynamicIslandHUDProps> = ({
 
   return (
     <div
-      className={`dynamic-island-container ${expanded ? 'expanded' : ''}`}
-      aria-label="Outerflow Dynamic Island Command & Telemetry Hub"
+      className={`dynamic-island-container bottom-docked ${expanded ? 'expanded' : ''}`}
+      aria-label="Outerflow Bottom Dynamic Island Transport & Command Hub"
     >
-      {/* Collapsed / Header Pill */}
-      <div className="dynamic-island-pill">
-        <button
-          type="button"
-          className="dynamic-island-status-btn"
-          onClick={onToggleRun}
-          title={running ? 'Pause Active Engine Execution' : 'Start Active Engine Execution'}
-        >
-          <span className={`island-pulse-dot ${running ? 'live' : 'idle'}`} />
-          {running ? <Pause size={11} /> : <Play size={11} />}
-          <span>{running ? 'LIVE' : 'IDLE'}</span>
-        </button>
-
-        <span className="island-divider" />
-
-        <div
-          className="dynamic-island-metrics"
-          onClick={() => setExpanded((e) => !e)}
-          title="Click or press Ctrl+K to expand Dynamic Island Command & Element Launcher"
-        >
-          <span className="island-metric">
-            <strong>{simTime.toFixed(1)}s</strong>
-          </span>
-          <span className="island-metric">
-            <strong>{fps}</strong> fps
-          </span>
-          <span className="island-metric hide-sm">
-            <strong>{entitiesCount}</strong> bodies · <strong>{cadCount}</strong> CAD ·{' '}
-            <strong>{graphNodesCount}</strong> nodes
-          </span>
-          {latestTelemetry && (
-            <span className="island-metric hide-md" style={{ color: '#38bdf8' }}>
-              <strong>{latestTelemetry.totalEnergy.toFixed(1)}</strong> J
-            </span>
-          )}
-        </div>
-
-        <span className="island-divider" />
-
-        <div className="dynamic-island-quick-actions">
-          <button
-            type="button"
-            className="island-mini-btn"
-            onClick={onNewBlankProject}
-            title="Start Empty Project (Clear Template & Construct from Scratch)"
-          >
-            <FilePlus2 size={11} />
-            <span className="hide-sm">Empty</span>
-          </button>
-
-          <button
-            type="button"
-            className={`island-mini-btn ${mode === 'system' ? 'active' : ''}`}
-            onClick={() => onModeChange(mode === 'system' ? 'physics' : 'system')}
-            title="Toggle Multidisciplinary System Graph & 9-Discipline Element Architecture"
-          >
-            <GitBranch size={11} />
-            <span className="hide-sm">Graph</span>
-          </button>
-
-          <button
-            type="button"
-            className={`island-mini-btn ${scriptOpen ? 'active' : ''}`}
-            onClick={onToggleScript}
-            title="Toggle Programmable Engineering Script IDE (JS / Python / C++)"
-          >
-            <Code2 size={11} />
-            <span className="hide-sm">IDE</span>
-          </button>
-
-          <button
-            type="button"
-            className="island-expand-trigger"
-            onClick={() => setExpanded((e) => !e)}
-            title="Expand Command Palette & 9-Discipline Element Launcher (Ctrl+K)"
-          >
-            <Command size={11} />
-            <span className="hide-md">Ctrl+K</span>
-            <ChevronDown
-              size={11}
-              style={{
-                transform: expanded ? 'rotate(180deg)' : 'none',
-                transition: 'transform 0.18s ease',
-              }}
-            />
-          </button>
-        </div>
-      </div>
-
-      {/* Expanded Dynamic Island Drawer */}
+      {/* Expanded Command & 9-Discipline Launcher Drawer (opens UPWARD from the bottom island) */}
       {expanded && (
-        <div className="dynamic-island-drawer">
+        <div className="dynamic-island-drawer upward">
           <div className="island-search-row">
             <Search size={13} color="#38bdf8" />
             <input
@@ -278,9 +243,37 @@ export const DynamicIslandHUD: React.FC<DynamicIslandHUDProps> = ({
           <div className="island-footer-bar">
             <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
               <Sparkles size={11} color="#38bdf8" />
-              <span>Harboria Labs Multidisciplinary Construction Studio</span>
+              <span>
+                {entitiesCount} bodies · {cadCount} CAD · {graphNodesCount} graph nodes ·{' '}
+                {fps} fps
+                {latestTelemetry
+                  ? ` · ${latestTelemetry.totalEnergy.toFixed(1)} J`
+                  : ''}
+              </span>
             </span>
             <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                type="button"
+                className={`cat-pill ${mode === 'system' ? 'active' : ''}`}
+                onClick={() => {
+                  onModeChange(mode === 'system' ? 'physics' : 'system');
+                  setExpanded(false);
+                }}
+              >
+                <GitBranch size={10} style={{ display: 'inline', marginRight: 3 }} />
+                System Graph
+              </button>
+              <button
+                type="button"
+                className={`cat-pill ${scriptOpen ? 'active' : ''}`}
+                onClick={() => {
+                  onToggleScript();
+                  setExpanded(false);
+                }}
+              >
+                <Code2 size={10} style={{ display: 'inline', marginRight: 3 }} />
+                Script IDE
+              </button>
               <button
                 type="button"
                 className={`cat-pill ${telemetryOpen ? 'active' : ''}`}
@@ -292,21 +285,166 @@ export const DynamicIslandHUD: React.FC<DynamicIslandHUDProps> = ({
                 <Activity size={10} style={{ display: 'inline', marginRight: 3 }} />
                 Telemetry &amp; A/B Runs
               </button>
-              <button
-                type="button"
-                className="cat-pill"
-                onClick={() => {
-                  onResetSim();
-                  setExpanded(false);
-                }}
-              >
-                <RotateCcw size={10} style={{ display: 'inline', marginRight: 3 }} />
-                Reset Solvers
-              </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* Main Bottom Dynamic Island Pill: Unified Transport, Speed, Checkpoints, Gravity & Command Trigger */}
+      <div className="dynamic-island-pill">
+        <button
+          type="button"
+          className="play-pill-btn"
+          onClick={onResetSim}
+          title="Reset Simulation"
+        >
+          <RotateCcw size={13} />
+        </button>
+
+        {onStepBack && recordedFramesCount > 0 && (
+          <button
+            type="button"
+            className="play-pill-btn"
+            onClick={onStepBack}
+            title="Step Back 1 Recorded Frame"
+          >
+            <StepBack size={13} />
+          </button>
+        )}
+
+        <button
+          type="button"
+          className={`play-pill-btn ${running ? 'running' : 'active'}`}
+          onClick={onToggleRun}
+          title="Play / Pause Simulation (Space)"
+        >
+          <span className={`island-pulse-dot ${running ? 'live' : 'idle'}`} />
+          {running ? <Pause size={12} /> : <Play size={12} />}
+        </button>
+
+        <button
+          type="button"
+          className="play-pill-btn"
+          onClick={onStep}
+          title="Step 1 Frame (1/60s)"
+        >
+          <StepForward size={13} />
+        </button>
+
+        {onSaveCheckpoint && (
+          <button
+            type="button"
+            className="play-pill-btn"
+            onClick={onSaveCheckpoint}
+            title="Save Simulation Checkpoint at Current Time"
+          >
+            <Bookmark size={12} />
+            <span className="hide-sm">+CP</span>
+          </button>
+        )}
+
+        {checkpoints.slice(-2).map((cp) => (
+          <button
+            key={cp.id}
+            type="button"
+            className="play-pill-btn hide-md"
+            onClick={() => onRestoreCheckpoint?.(cp.id)}
+            title={`Restore ${cp.label} at ${cp.simTime.toFixed(2)}s`}
+          >
+            <span>
+              {cp.label} {cp.simTime.toFixed(1)}s
+            </span>
+          </button>
+        ))}
+
+        <span className="island-divider" />
+
+        {SPEED_OPTIONS.map((spd) => (
+          <button
+            key={spd}
+            type="button"
+            className={`play-pill-btn ${Math.abs(timeScale - spd) < 0.05 ? 'active' : ''}`}
+            onClick={() => onTimeScaleChange(spd)}
+          >
+            {spd}x
+          </button>
+        ))}
+
+        <span className="island-divider" />
+
+        <button
+          type="button"
+          className={`play-pill-btn ${recording ? 'recording' : ''}`}
+          onClick={onToggleRecord}
+          title="Record Frames for Timeline Scrubbing"
+        >
+          <Circle size={10} fill={recording ? '#fb7185' : 'none'} />
+          {recording && <span>{recordedFramesCount}</span>}
+        </button>
+
+        {recordedFramesCount > 1 && (
+          <>
+            <input
+              type="range"
+              className="studio-range"
+              min={0}
+              max={recordedFramesCount - 1}
+              value={playbackIndex ?? recordedFramesCount - 1}
+              onChange={(e) => onScrubFrame(Number(e.target.value))}
+              style={{ width: 70 }}
+              title="Scrub Recorded Frames"
+            />
+            {playbackIndex !== null && (
+              <button
+                type="button"
+                className="play-pill-btn active"
+                onClick={() => onScrubFrame(null)}
+              >
+                Live
+              </button>
+            )}
+          </>
+        )}
+
+        <select
+          aria-label="Gravity Preset"
+          className="gravity-select-mini"
+          value={gravityKey}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === 'earth') onGravityChange([0, -9.81, 0]);
+            else if (v === 'moon') onGravityChange([0, -1.62, 0]);
+            else if (v === 'mars') onGravityChange([0, -3.72, 0]);
+            else onGravityChange([0, 0, 0]);
+          }}
+        >
+          <option value="earth">Earth g</option>
+          <option value="moon">Moon g</option>
+          <option value="mars">Mars g</option>
+          <option value="zerog">Zero-G</option>
+        </select>
+
+        <span className="playback-clock">{formatClock(simTime)}</span>
+
+        <span className="island-divider" />
+
+        <button
+          type="button"
+          className="island-expand-trigger"
+          onClick={() => setExpanded((e) => !e)}
+          title="Open 9-Discipline Element & 3D Part Launcher (Ctrl+K)"
+        >
+          <Command size={11} />
+          <span className="hide-sm">+ Elements</span>
+          <ChevronUp
+            size={11}
+            style={{
+              transform: expanded ? 'rotate(180deg)' : 'none',
+              transition: 'transform 0.18s ease',
+            }}
+          />
+        </button>
+      </div>
     </div>
   );
 };
