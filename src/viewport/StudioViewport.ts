@@ -602,8 +602,10 @@ export class StudioViewport {
 
     for (const ent of entities) {
       const geom = this.createEntityGeometry(ent);
+      const hasVertexColors = Boolean(geom.getAttribute('color'));
       const mat = new THREE.MeshStandardMaterial({
-        color: ent.color,
+        color: hasVertexColors ? '#ffffff' : ent.color,
+        vertexColors: hasVertexColors,
         metalness: ent.metalness,
         roughness: ent.roughness,
         transparent: ent.opacity < 1,
@@ -726,8 +728,10 @@ export class StudioViewport {
 
     for (const part of parts) {
       const geom = createParametricGeometry(part);
+      const hasVertexColors = Boolean(geom.getAttribute('color'));
       const mat = new THREE.MeshStandardMaterial({
-        color: part.color,
+        color: hasVertexColors ? '#ffffff' : part.color,
+        vertexColors: hasVertexColors,
         metalness: 0.35,
         roughness: 0.32,
         wireframe: this.stage.wireframe,

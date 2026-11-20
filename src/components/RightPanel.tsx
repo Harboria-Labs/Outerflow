@@ -52,6 +52,13 @@ import {
   computeEntityVolumeAndArea,
   type MaterialPresetKey,
 } from '../engines/project/parameterAndTemplateEngine';
+import { ROBOTICS_HARDWARE_CATALOG } from '../engines/electronics/roboticsHardwareLibrary';
+import {
+  WORKBENCH_MISSIONS,
+  getHardwareSpec,
+  type WorkbenchConfig,
+  type WorkbenchWire,
+} from '../engines/electronics/workbench3D';
 import {
   AccordionSection,
   SegmentedControl,
@@ -115,6 +122,15 @@ interface RightPanelProps {
   onSendMeshToPhysics: () => void;
   onSendMeshToCad: () => void;
   // Electronics
+  electronicsSubMode?: 'workbench' | 'circuit';
+  onElectronicsSubModeChange?: (sub: 'workbench' | 'circuit') => void;
+  workbenchConfig?: WorkbenchConfig;
+  onUpdateWorkbenchConfig?: (next: WorkbenchConfig) => void;
+  onSelectWorkbenchMission?: (missionId: string) => void;
+  onClearWorkbenchWires?: () => void;
+  onAddWorkbenchWire?: (wire: WorkbenchWire) => void;
+  onRemoveWorkbenchWire?: (wireId: string) => void;
+  onRemoveWorkbenchModule?: (instanceId: string) => void;
   circuit: CircuitSchematic;
   circuitSolved: CircuitSolveResult;
   selectedCircuitCompId: string | null;
@@ -238,6 +254,15 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   onUndoMesh,
   onSendMeshToPhysics,
   onSendMeshToCad,
+  electronicsSubMode = 'workbench',
+  onElectronicsSubModeChange,
+  workbenchConfig,
+  onUpdateWorkbenchConfig,
+  onSelectWorkbenchMission,
+  onClearWorkbenchWires,
+  onAddWorkbenchWire,
+  onRemoveWorkbenchWire,
+  onRemoveWorkbenchModule,
   circuit,
   circuitSolved,
   selectedCircuitCompId,
@@ -285,6 +310,10 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   const [newParamName, setNewParamName] = useState('Custom Multiplier');
   const [newParamSymbol, setNewParamSymbol] = useState('custom_v');
   const [newParamFormula, setNewParamFormula] = useState('mass * 9.81');
+  const [wbBoardPin, setWbBoardPin] = useState('D13');
+  const [wbModuleId, setWbModuleId] = useState('');
+  const [wbModPin, setWbModPin] = useState('');
+  const [wbWireColor, setWbWireColor] = useState('#facc15');
 
   const resolvedCsgA = cadParts.some((p) => p.id === csgA) ? csgA : cadParts[0]?.id ?? '';
   const resolvedCsgB = cadParts.some((p) => p.id === csgB)
@@ -1597,161 +1626,464 @@ export const RightPanel: React.FC<RightPanelProps> = ({
 
         {mode === 'electronics' && (
           <>
-            <AccordionSection title="Proteus Schematic & Inspector" defaultOpen>
-              <button
-                type="button"
-                className={`action-btn ${schematicOpen ? 'primary' : ''}`}
-                onClick={onToggleSchematic}
-              >
-                <Cpu size={13} />
-                <span>{schematicOpen ? 'Hide 2D Schematic' : 'Open 2D Schematic Editor'}</span>
-              </button>
+            {onElectronicsSubModeChange && (
+              <div style={{ padding: '8px 12px 4px 12px' }}>
+                <SegmentedControl
+                  value={electronicsSubMode}
+                  columns={2}
+                  options={[
+                    { value: 'workbench', label: '3D Bench & Wiring' },
+                    { value: 'circuit', label: 'MNA Circuit Probes' },
+                  ]}
+                  onChange={onElectronicsSubModeChange}
+                />
+              </div>
+            )}
 
-              {circuitSolved.warnings.length > 0 && (
-                <div className="error-banner">{circuitSolved.warnings.join('\n')}</div>
-              )}
+            {electronicsSubMode === 'workbench' && workbenchConfig ? (
+              (() => {
+                const activeBoardSpec = getHardwareSpec(workbenchConfig.boardId);
+                const resolvedBoardPin = activeBoardSpec.pins.some((p) => p.id === wbBoardPin)
+                  ? wbBoardPin
+                  : activeBoardSpec.pins[0]?.id ?? '';
+                const resolvedMod =
+                  workbenchConfig.modules.find((m) => m.instanceId === wbModuleId) ??
+                  workbenchConfig.modules[0] ??
+                  null;
+                const resolvedModSpec = resolvedMod ? getHardwareSpec(resolvedMod.specId) : null;
+                const resolvedModPin =
+                  resolvedModSpec && resolvedModSpec.pins.some((p) => p.id === wbModPin)
+                    ? wbModPin
+                    : resolvedModSpec?.pins[0]?.id ?? '';
+                const activeMission = WORKBENCH_MISSIONS.find(
+                  (m) => m.id === workbenchConfig.missionId
+                );
 
-              <div className="hierarchy-list" style={{ maxHeight: 135, overflowY: 'auto' }}>
-                {circuit.components.map((c) => {
-                  const ma = (circuitSolved.branchCurrents[c.id] ?? 0) * 1000;
-                  return (
-                    <div
-                      key={c.id}
-                      className={`hierarchy-item ${selectedComp?.id === c.id ? 'selected' : ''}`}
-                      onClick={() => onSelectCircuitComp(c.id)}
-                    >
-                      <div className="hierarchy-label">
-                        <span className="hierarchy-name">{c.name}</span>
-                        <span className="hierarchy-tag">{ma.toFixed(1)}mA</span>
+                return (
+                  <>
+                    <AccordionSection title="3D Workbench & Pin Wiring" defaultOpen>
+                      <StudioSlider
+                        label="Assemble / Explode"
+                        value={workbenchConfig.exploded}
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        decimals={2}
+                        onChange={(exploded) =>
+                          onUpdateWorkbenchConfig?.({ ...workbenchConfig, exploded })
+                        }
+                      />
+                      <div style={{ display: 'flex', gap: 5 }}>
+                        <button
+                          type="button"
+                          className="action-btn primary"
+                          style={{ flex: 1 }}
+                          onClick={() => onSelectWorkbenchMission?.(workbenchConfig.missionId)}
+                        >
+                          Wire it for me
+                        </button>
+                        <button
+                          type="button"
+                          className="action-btn"
+                          style={{ flex: 1 }}
+                          onClick={() => onClearWorkbenchWires?.()}
+                        >
+                          Remove Wires
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        className="mini-icon-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDeleteCircuitComp(c.id);
-                        }}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
 
-              {selectedComp && (
-                <>
-                  <div className="field-row">
-                    <span className="field-label">Name</span>
-                    <input
-                      className="input-text"
-                      style={{ width: '62%' }}
-                      value={selectedComp.name}
-                      onChange={(e) =>
-                        onUpdateCircuitComp(selectedComp.id, { name: e.target.value })
-                      }
-                    />
-                  </div>
-                  <div className="field-row">
-                    <span className="field-label">Node A / B</span>
-                    <div style={{ display: 'flex', gap: 4, width: '62%' }}>
-                      <input
-                        className="input-text"
-                        value={selectedComp.nodeA}
-                        onChange={(e) =>
-                          onUpdateCircuitComp(selectedComp.id, { nodeA: e.target.value })
-                        }
-                      />
-                      <input
-                        className="input-text"
-                        value={selectedComp.nodeB}
-                        onChange={(e) =>
-                          onUpdateCircuitComp(selectedComp.id, { nodeB: e.target.value })
-                        }
-                      />
-                    </div>
-                  </div>
+                      {resolvedMod && resolvedModSpec && (
+                        <div
+                          style={{
+                            background: 'var(--bg-surface)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 6,
+                            padding: 7,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 5,
+                          }}
+                        >
+                          <span className="field-label" style={{ fontWeight: 600 }}>
+                            Connect 3D Jumper Wire
+                          </span>
+                          <div className="field-row">
+                            <span className="field-label">{activeBoardSpec.name.split(' ')[0]} Pin</span>
+                            <select
+                              className="input-select"
+                              style={{ width: '58%' }}
+                              value={resolvedBoardPin}
+                              onChange={(e) => setWbBoardPin(e.target.value)}
+                            >
+                              {activeBoardSpec.pins.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.label} ({p.kind})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="field-row">
+                            <span className="field-label">Module</span>
+                            <select
+                              className="input-select"
+                              style={{ width: '58%' }}
+                              value={resolvedMod.instanceId}
+                              onChange={(e) => setWbModuleId(e.target.value)}
+                            >
+                              {workbenchConfig.modules.map((m) => (
+                                <option key={m.instanceId} value={m.instanceId}>
+                                  {getHardwareSpec(m.specId).name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="field-row">
+                            <span className="field-label">Target Pin</span>
+                            <select
+                              className="input-select"
+                              style={{ width: '58%' }}
+                              value={resolvedModPin}
+                              onChange={(e) => setWbModPin(e.target.value)}
+                            >
+                              {resolvedModSpec.pins.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="field-row">
+                            <span className="field-label">Wire Color</span>
+                            <div style={{ display: 'flex', gap: 5 }}>
+                              {[
+                                ['#facc15', 'Signal'],
+                                ['#ef4444', 'Power'],
+                                ['#18181b', 'GND'],
+                                ['#22d3ee', 'Bus'],
+                                ['#34d399', 'Data'],
+                              ].map(([col, lbl]) => (
+                                <button
+                                  key={col}
+                                  type="button"
+                                  title={lbl}
+                                  onClick={() => setWbWireColor(col)}
+                                  style={{
+                                    width: 18,
+                                    height: 18,
+                                    borderRadius: '50%',
+                                    background: col,
+                                    border:
+                                      wbWireColor === col
+                                        ? '2px solid #ffffff'
+                                        : '1px solid #52525b',
+                                    cursor: 'pointer',
+                                  }}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="action-btn"
+                            onClick={() =>
+                              onAddWorkbenchWire?.({
+                                id: `wire-${Date.now()}`,
+                                fromTarget: 'board',
+                                fromPin: resolvedBoardPin,
+                                toTarget: resolvedMod.instanceId,
+                                toPin: resolvedModPin,
+                                color: wbWireColor,
+                              })
+                            }
+                          >
+                            + Connect 3D Wire ({resolvedBoardPin} → {resolvedModPin})
+                          </button>
+                        </div>
+                      )}
 
-                  {selectedComp.kind === 'switch' ? (
-                    <ToggleSwitch
-                      label="Switch Closed"
-                      checked={Boolean(selectedComp.closed)}
-                      onChange={(closed) => onUpdateCircuitComp(selectedComp.id, { closed })}
-                    />
-                  ) : (
-                    <StudioSlider
-                      label={
-                        selectedComp.kind === 'battery' || selectedComp.kind === 'mcu'
-                          ? 'Voltage (V)'
-                          : selectedComp.kind === 'led'
-                          ? 'Drop Vf (V)'
-                          : selectedComp.kind === 'capacitor'
-                          ? 'Cap (µF)'
-                          : 'Ohms (Ω)'
-                      }
-                      value={selectedComp.value}
-                      min={
-                        selectedComp.kind === 'battery' || selectedComp.kind === 'mcu'
-                          ? 0
-                          : selectedComp.kind === 'led'
-                          ? 1.2
-                          : 1
-                      }
-                      max={
-                        selectedComp.kind === 'resistor'
-                          ? 5000
-                          : selectedComp.kind === 'capacitor'
-                          ? 1000
-                          : 24
-                      }
-                      step={selectedComp.kind === 'resistor' ? 10 : 0.1}
-                      decimals={selectedComp.kind === 'resistor' ? 0 : 1}
-                      onChange={(value) => onUpdateCircuitComp(selectedComp.id, { value })}
-                    />
+                      <div className="hierarchy-list" style={{ maxHeight: 110, overflowY: 'auto' }}>
+                        {workbenchConfig.modules.map((m) => (
+                          <div key={m.instanceId} className="hierarchy-item">
+                            <div className="hierarchy-label">
+                              <span
+                                className="color-dot"
+                                style={{ background: getHardwareSpec(m.specId).defaultColor }}
+                              />
+                              <span className="hierarchy-name">{getHardwareSpec(m.specId).name}</span>
+                            </div>
+                            <button
+                              type="button"
+                              className="mini-icon-btn"
+                              onClick={() => onRemoveWorkbenchModule?.(m.instanceId)}
+                              title="Remove Module"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                        {workbenchConfig.wires.map((w) => (
+                          <div key={w.id} className="hierarchy-item">
+                            <div className="hierarchy-label">
+                              <span className="color-dot" style={{ background: w.color }} />
+                              <span className="hierarchy-name" style={{ fontSize: 10.5 }}>
+                                {w.fromPin} → {w.toPin}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              className="mini-icon-btn"
+                              onClick={() => onRemoveWorkbenchWire?.(w.id)}
+                              title="Disconnect Wire"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </AccordionSection>
+
+                    <AccordionSection title={`${activeBoardSpec.name} Specs & Callouts`} defaultOpen>
+                      <div className="details-table">
+                        <div className="details-row">
+                          <span className="details-key">MCU</span>
+                          <span className="details-val">{activeBoardSpec.specs.mcu}</span>
+                        </div>
+                        <div className="details-row">
+                          <span className="details-key">Clock</span>
+                          <span className="details-val">{activeBoardSpec.specs.clock}</span>
+                        </div>
+                        <div className="details-row">
+                          <span className="details-key">Flash / RAM</span>
+                          <span className="details-val">
+                            {activeBoardSpec.specs.flash} / {activeBoardSpec.specs.ram}
+                          </span>
+                        </div>
+                        <div className="details-row">
+                          <span className="details-key">GPIO / Analog</span>
+                          <span className="details-val">
+                            {activeBoardSpec.specs.gpio} · {activeBoardSpec.specs.analog}
+                          </span>
+                        </div>
+                        <div className="details-row">
+                          <span className="details-key">Logic Voltage</span>
+                          <span className="details-val">{activeBoardSpec.logicVoltage}</span>
+                        </div>
+                      </div>
+
+                      {activeBoardSpec.callouts && activeBoardSpec.callouts.length > 0 && (
+                        <div className="hierarchy-list" style={{ maxHeight: 145, overflowY: 'auto' }}>
+                          {activeBoardSpec.callouts.map((c) => (
+                            <div
+                              key={c.number}
+                              style={{
+                                background: 'var(--bg-surface)',
+                                border: '1px solid var(--border)',
+                                borderRadius: 5,
+                                padding: '4px 6px',
+                                fontSize: 10.5,
+                              }}
+                            >
+                              <strong>
+                                #{c.number} {c.title}
+                              </strong>
+                              <div className="field-label" style={{ fontSize: 10 }}>
+                                {c.detail}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </AccordionSection>
+
+                    <AccordionSection title="Firmware Sketch & Board Compare" defaultOpen={false}>
+                      {activeMission && <pre className="console-box">{activeMission.code}</pre>}
+                      <div style={{ maxHeight: 150, overflowY: 'auto' }}>
+                        <table className="sweep-table">
+                          <thead>
+                            <tr>
+                              <th>Board</th>
+                              <th>MCU</th>
+                              <th>Clock</th>
+                              <th>Logic</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {ROBOTICS_HARDWARE_CATALOG.filter((h) => h.group === 'boards').map(
+                              (b) => (
+                                <tr key={b.id}>
+                                  <td>{b.name}</td>
+                                  <td>{b.specs.mcu}</td>
+                                  <td>{b.specs.clock}</td>
+                                  <td>{b.logicVoltage}</td>
+                                </tr>
+                              )
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </AccordionSection>
+                  </>
+                );
+              })()
+            ) : (
+              <>
+                <AccordionSection title="Proteus Schematic & Inspector" defaultOpen>
+                  <button
+                    type="button"
+                    className={`action-btn ${schematicOpen ? 'primary' : ''}`}
+                    onClick={onToggleSchematic}
+                  >
+                    <Cpu size={13} />
+                    <span>{schematicOpen ? 'Hide 2D Schematic' : 'Open 2D Schematic Editor'}</span>
+                  </button>
+
+                  {circuitSolved.warnings.length > 0 && (
+                    <div className="error-banner">{circuitSolved.warnings.join('\n')}</div>
                   )}
-                </>
-              )}
-            </AccordionSection>
 
-            <AccordionSection title="Live Node Probes & RC Trace" defaultOpen>
-              <div className="details-table">
-                {Object.entries(circuitSolved.nodeVoltages).map(([node, volts]) => (
-                  <div className="details-row" key={node}>
-                    <span className="details-key">Node {node}</span>
-                    <span className="details-val">{volts.toFixed(3)} V</span>
+                  <div className="hierarchy-list" style={{ maxHeight: 135, overflowY: 'auto' }}>
+                    {circuit.components.map((c) => {
+                      const ma = (circuitSolved.branchCurrents[c.id] ?? 0) * 1000;
+                      return (
+                        <div
+                          key={c.id}
+                          className={`hierarchy-item ${selectedComp?.id === c.id ? 'selected' : ''}`}
+                          onClick={() => onSelectCircuitComp(c.id)}
+                        >
+                          <div className="hierarchy-label">
+                            <span className="hierarchy-name">{c.name}</span>
+                            <span className="hierarchy-tag">{ma.toFixed(1)}mA</span>
+                          </div>
+                          <button
+                            type="button"
+                            className="mini-icon-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteCircuitComp(c.id);
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
-                ))}
-                {Object.entries(circuitSolved.motorRpm).map(([mid, rpm]) => (
-                  <div className="details-row" key={mid}>
-                    <span className="details-key">Motor Speed</span>
-                    <span className="details-val">{rpm} RPM</span>
+
+                  {selectedComp && (
+                    <>
+                      <div className="field-row">
+                        <span className="field-label">Name</span>
+                        <input
+                          className="input-text"
+                          style={{ width: '62%' }}
+                          value={selectedComp.name}
+                          onChange={(e) =>
+                            onUpdateCircuitComp(selectedComp.id, { name: e.target.value })
+                          }
+                        />
+                      </div>
+                      <div className="field-row">
+                        <span className="field-label">Node A / B</span>
+                        <div style={{ display: 'flex', gap: 4, width: '62%' }}>
+                          <input
+                            className="input-text"
+                            value={selectedComp.nodeA}
+                            onChange={(e) =>
+                              onUpdateCircuitComp(selectedComp.id, { nodeA: e.target.value })
+                            }
+                          />
+                          <input
+                            className="input-text"
+                            value={selectedComp.nodeB}
+                            onChange={(e) =>
+                              onUpdateCircuitComp(selectedComp.id, { nodeB: e.target.value })
+                            }
+                          />
+                        </div>
+                      </div>
+
+                      {selectedComp.kind === 'switch' ? (
+                        <ToggleSwitch
+                          label="Switch Closed"
+                          checked={Boolean(selectedComp.closed)}
+                          onChange={(closed) => onUpdateCircuitComp(selectedComp.id, { closed })}
+                        />
+                      ) : (
+                        <StudioSlider
+                          label={
+                            selectedComp.kind === 'battery' || selectedComp.kind === 'mcu'
+                              ? 'Voltage (V)'
+                              : selectedComp.kind === 'led'
+                              ? 'Drop Vf (V)'
+                              : selectedComp.kind === 'capacitor'
+                              ? 'Cap (µF)'
+                              : 'Ohms (Ω)'
+                          }
+                          value={selectedComp.value}
+                          min={
+                            selectedComp.kind === 'battery' || selectedComp.kind === 'mcu'
+                              ? 0
+                              : selectedComp.kind === 'led'
+                              ? 1.2
+                              : 1
+                          }
+                          max={
+                            selectedComp.kind === 'resistor'
+                              ? 5000
+                              : selectedComp.kind === 'capacitor'
+                              ? 1000
+                              : 24
+                          }
+                          step={selectedComp.kind === 'resistor' ? 10 : 0.1}
+                          decimals={selectedComp.kind === 'resistor' ? 0 : 1}
+                          onChange={(value) => onUpdateCircuitComp(selectedComp.id, { value })}
+                        />
+                      )}
+                    </>
+                  )}
+                </AccordionSection>
+
+                <AccordionSection title="Live Node Probes & RC Trace" defaultOpen>
+                  <div className="details-table">
+                    {Object.entries(circuitSolved.nodeVoltages).map(([node, volts]) => (
+                      <div className="details-row" key={node}>
+                        <span className="details-key">Node {node}</span>
+                        <span className="details-val">{volts.toFixed(3)} V</span>
+                      </div>
+                    ))}
+                    {Object.entries(circuitSolved.motorRpm).map(([mid, rpm]) => (
+                      <div className="details-row" key={mid}>
+                        <span className="details-key">Motor Speed</span>
+                        <span className="details-val">{rpm} RPM</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-              {circuitSolved.transientTrace.length > 2 && (
-                <div className="blueprint-box" style={{ marginTop: 4 }}>
-                  <svg viewBox="0 0 260 66" style={{ width: '100%', display: 'block' }}>
-                    <rect width="260" height="66" fill="#09090d" rx="4" />
-                    <polyline
-                      fill="none"
-                      stroke="#22d3ee"
-                      strokeWidth="1.8"
-                      points={circuitSolved.transientTrace
-                        .map((pt, idx) => {
-                          const maxV = Math.max(
-                            1,
-                            ...circuitSolved.transientTrace.map((t) => t.voltage)
-                          );
-                          const x = 8 + (idx / (circuitSolved.transientTrace.length - 1)) * 244;
-                          const y = 58 - (pt.voltage / maxV) * 48;
-                          return `${x.toFixed(1)},${y.toFixed(1)}`;
-                        })
-                        .join(' ')}
-                    />
-                  </svg>
-                </div>
-              )}
-            </AccordionSection>
+                  {circuitSolved.transientTrace.length > 2 && (
+                    <div className="blueprint-box" style={{ marginTop: 4 }}>
+                      <svg viewBox="0 0 260 66" style={{ width: '100%', display: 'block' }}>
+                        <rect width="260" height="66" fill="#09090d" rx="4" />
+                        <polyline
+                          fill="none"
+                          stroke="#22d3ee"
+                          strokeWidth="1.8"
+                          points={circuitSolved.transientTrace
+                            .map((pt, idx) => {
+                              const maxV = Math.max(
+                                1,
+                                ...circuitSolved.transientTrace.map((t) => t.voltage)
+                              );
+                              const x = 8 + (idx / (circuitSolved.transientTrace.length - 1)) * 244;
+                              const y = 58 - (pt.voltage / maxV) * 48;
+                              return `${x.toFixed(1)},${y.toFixed(1)}`;
+                            })
+                            .join(' ')}
+                        />
+                      </svg>
+                    </div>
+                  )}
+                </AccordionSection>
+              </>
+            )}
           </>
         )}
 

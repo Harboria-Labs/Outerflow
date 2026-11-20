@@ -63,7 +63,7 @@ export function buildLogoSVGString(config: LogoStudioConfig): string {
   <text x="480" y="280" text-anchor="middle" fill="#a1a1aa" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="600" letter-spacing="5">${lab}</text>
   <text x="480" y="324" text-anchor="middle" fill="#f4f4f5" font-family="Inter, Arial, sans-serif" font-size="36" font-weight="700" letter-spacing="7">${title}</text>
   <line x1="360" y1="342" x2="600" y2="342" stroke="${s}" stroke-opacity="0.55" stroke-width="1.5"/>
-  <text x="480" y="372" text-anchor="middle" fill="#d4d4d8" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="400" letter-spacing="1.2">${tagline}</text>
+  <text x="480" y="372" text-anchor="middle" fill="#e2e8f0" font-family="'Cormorant Garamond', 'Playfair Display', Georgia, serif" font-style="italic" font-size="22" font-weight="600" letter-spacing="1.5">${tagline}</text>
 </svg>`;
 }
 
@@ -115,8 +115,8 @@ export function drawIntroOverlay2D(
     ctx.stroke();
   }
 
-  ctx.fillStyle = '#d4d4d8';
-  ctx.font = '400 17px Inter, sans-serif';
+  ctx.fillStyle = '#e2e8f0';
+  ctx.font = "italic 600 22px 'Cormorant Garamond', 'Playfair Display', Georgia, serif";
   ctx.fillText(config.tagline || 'Where engineering births lifeforms.', cx, cy + 54);
   ctx.restore();
 }
@@ -292,7 +292,7 @@ export function printDesignSheet(opts: {
   .head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #18181b; padding-bottom: 12px; margin-bottom: 20px; }
   .brand { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: #52525b; }
   h1 { margin: 4px 0 0 0; font-size: 24px; letter-spacing: 0.5px; }
-  .sub { font-size: 13px; color: #52525b; margin-top: 4px; }
+  .sub { font-family: 'Cormorant Garamond', 'Playfair Display', Georgia, serif; font-style: italic; font-size: 16px; letter-spacing: 0.04em; color: #3f3f46; margin-top: 4px; }
   .preview { width: 100%; border-radius: 10px; overflow: hidden; border: 1px solid #d4d4d8; background: #050507; margin-bottom: 20px; }
   .preview img { width: 100%; max-height: 460px; object-fit: contain; display: block; }
   table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-bottom: 16px; }

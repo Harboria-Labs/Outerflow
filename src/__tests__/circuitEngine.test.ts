@@ -5,6 +5,10 @@ import {
   getCircuitPresets,
   solveCircuit,
 } from '../engines/electronics/circuitEngine';
+import {
+  WORKBENCH_MISSIONS,
+  buildWorkbench3DScene,
+} from '../engines/electronics/workbench3D';
 import type { CircuitSchematic } from '../types/studio';
 
 describe('Proteus-style Electronics Circuit Engine', () => {
@@ -97,5 +101,34 @@ describe('Proteus-style Electronics Circuit Engine', () => {
     });
     expect(meshCount).toBeGreaterThan(0);
     handle.dispose();
+  });
+
+  it('builds 3D Hardware Workbench scenes with curved DuPont jumper wires across all missions', () => {
+    expect(WORKBENCH_MISSIONS).toHaveLength(4);
+    for (const mission of WORKBENCH_MISSIONS) {
+      const handle = buildWorkbench3DScene({
+        boardId: mission.boardId,
+        missionId: mission.id,
+        modules: mission.modules,
+        wires: mission.wires,
+        exploded: 0.25,
+        powered: true,
+      });
+      let meshCount = 0;
+      handle.group.traverse((obj) => {
+        if ((obj as THREE.Mesh).isMesh) {
+          meshCount++;
+          const pos = (obj as THREE.Mesh).geometry.getAttribute('position');
+          expect(pos.count).toBeGreaterThan(0);
+          for (let i = 0; i < pos.count; i++) {
+            expect(Number.isFinite(pos.getX(i))).toBe(true);
+            expect(Number.isFinite(pos.getY(i))).toBe(true);
+            expect(Number.isFinite(pos.getZ(i))).toBe(true);
+          }
+        }
+      });
+      expect(meshCount).toBeGreaterThan(5);
+      handle.dispose();
+    }
   });
 });

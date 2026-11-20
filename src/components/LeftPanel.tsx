@@ -36,6 +36,11 @@ import type {
 } from '../types/studio';
 import type { PhysicsPreset } from '../engines/physics/presets';
 import { PART_LIBRARY, type LibraryPartMeta } from '../engines/cad/partsLibrary';
+import { ROBOTICS_HARDWARE_CATALOG } from '../engines/electronics/roboticsHardwareLibrary';
+import {
+  WORKBENCH_MISSIONS,
+  type WorkbenchConfig,
+} from '../engines/electronics/workbench3D';
 import { PARAMETRIC_PRESETS } from '../engines/math/parametricSurface';
 import { EXPLICIT_PRESETS } from '../engines/math/explicitSurface';
 import { IMPLICIT_PRESETS } from '../engines/math/marchingTetrahedra';
@@ -88,6 +93,12 @@ interface LeftPanelProps {
   onSelectSculptPreset: (preset: SculptBasePreset) => void;
   onSelectSculptBrush: (brush: SculptBrushKind) => void;
   // Electronics
+  electronicsSubMode?: 'workbench' | 'circuit';
+  onElectronicsSubModeChange?: (sub: 'workbench' | 'circuit') => void;
+  workbenchConfig?: WorkbenchConfig;
+  onSelectWorkbenchBoard?: (boardId: string) => void;
+  onSelectWorkbenchMission?: (missionId: string) => void;
+  onAddWorkbenchModule?: (specId: string) => void;
   circuitPresets: CircuitSchematic[];
   activeCircuitId: string;
   onLoadCircuitPreset: (id: string) => void;
@@ -190,6 +201,12 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
   meshConfig,
   onSelectSculptPreset,
   onSelectSculptBrush,
+  electronicsSubMode = 'workbench',
+  onElectronicsSubModeChange,
+  workbenchConfig,
+  onSelectWorkbenchBoard,
+  onSelectWorkbenchMission,
+  onAddWorkbenchModule,
   circuitPresets,
   activeCircuitId,
   onLoadCircuitPreset,
@@ -361,36 +378,123 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
 
         {mode === 'electronics' && (
           <>
-            <AccordionSection title="Circuit Templates" defaultOpen>
-              <div className="hierarchy-list">
-                {circuitPresets.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    className={`compact-btn ${activeCircuitId === c.id ? 'active' : ''}`}
-                    onClick={() => onLoadCircuitPreset(c.id)}
-                  >
-                    <span>{c.name}</span>
-                    <span className="compact-btn-sub">{c.description}</span>
-                  </button>
-                ))}
+            {onElectronicsSubModeChange && (
+              <div style={{ padding: '8px 12px 4px 12px' }}>
+                <SegmentedControl
+                  value={electronicsSubMode}
+                  columns={2}
+                  options={[
+                    { value: 'workbench', label: '3D Workbench' },
+                    { value: 'circuit', label: 'Circuit Solver' },
+                  ]}
+                  onChange={onElectronicsSubModeChange}
+                />
               </div>
-            </AccordionSection>
+            )}
 
-            <AccordionSection title="Add Component" defaultOpen>
-              <div className="compact-grid">
-                {CIRCUIT_PALETTE.map((item) => (
-                  <button
-                    key={item.kind}
-                    type="button"
-                    className="compact-btn"
-                    onClick={() => onAddCircuitComponent(item.kind)}
-                  >
-                    <span>{item.label}</span>
-                  </button>
-                ))}
-              </div>
-            </AccordionSection>
+            {electronicsSubMode === 'workbench' && workbenchConfig ? (
+              <>
+                <AccordionSection title="Guided Build Missions" defaultOpen>
+                  <div className="hierarchy-list">
+                    {WORKBENCH_MISSIONS.map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        className={`compact-btn ${
+                          workbenchConfig.missionId === m.id ? 'active' : ''
+                        }`}
+                        onClick={() => onSelectWorkbenchMission?.(m.id)}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                          <span>{m.name}</span>
+                          <span className="hierarchy-tag">{m.level}</span>
+                        </div>
+                        <span className="compact-btn-sub">{m.summary}</span>
+                      </button>
+                    ))}
+                  </div>
+                </AccordionSection>
+
+                <AccordionSection title="3D Boards (8)" defaultOpen>
+                  <div className="hierarchy-list" style={{ maxHeight: 190, overflowY: 'auto' }}>
+                    {ROBOTICS_HARDWARE_CATALOG.filter((h) => h.group === 'boards').map((b) => (
+                      <button
+                        key={b.id}
+                        type="button"
+                        className={`compact-btn ${workbenchConfig.boardId === b.id ? 'active' : ''}`}
+                        onClick={() => onSelectWorkbenchBoard?.(b.id)}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+                          <span className="color-dot" style={{ background: b.defaultColor }} />
+                          <span>{b.name}</span>
+                          <span className="hierarchy-tag" style={{ marginLeft: 'auto' }}>
+                            {b.logicVoltage}
+                          </span>
+                        </div>
+                        <span className="compact-btn-sub">
+                          {b.specs.mcu} · {b.specs.clock}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </AccordionSection>
+
+                <AccordionSection title="Outputs, Sensors & Actuators (14)" defaultOpen>
+                  <div className="hierarchy-list" style={{ maxHeight: 220, overflowY: 'auto' }}>
+                    {ROBOTICS_HARDWARE_CATALOG.filter((h) => h.group !== 'boards').map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className="compact-btn"
+                        onClick={() => onAddWorkbenchModule?.(item.id)}
+                        title={item.summary}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+                          <span className="color-dot" style={{ background: item.defaultColor }} />
+                          <span>+ {item.name}</span>
+                          <span className="hierarchy-tag" style={{ marginLeft: 'auto' }}>
+                            {item.group}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </AccordionSection>
+              </>
+            ) : (
+              <>
+                <AccordionSection title="Circuit Templates" defaultOpen>
+                  <div className="hierarchy-list">
+                    {circuitPresets.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className={`compact-btn ${activeCircuitId === c.id ? 'active' : ''}`}
+                        onClick={() => onLoadCircuitPreset(c.id)}
+                      >
+                        <span>{c.name}</span>
+                        <span className="compact-btn-sub">{c.description}</span>
+                      </button>
+                    ))}
+                  </div>
+                </AccordionSection>
+
+                <AccordionSection title="Add Component" defaultOpen>
+                  <div className="compact-grid">
+                    {CIRCUIT_PALETTE.map((item) => (
+                      <button
+                        key={item.kind}
+                        type="button"
+                        className="compact-btn"
+                        onClick={() => onAddCircuitComponent(item.kind)}
+                      >
+                        <span>{item.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </AccordionSection>
+              </>
+            )}
           </>
         )}
 

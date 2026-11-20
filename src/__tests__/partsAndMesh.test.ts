@@ -17,6 +17,14 @@ import {
   MeshSculptEngine,
   createDefaultMeshSculptConfig,
 } from '../engines/mesh/meshSculptEngine';
+import {
+  deserializeMeshData,
+  serializeBufferGeometry,
+} from '../engines/cad/parametricGenerators';
+import {
+  ROBOTICS_HARDWARE_CATALOG,
+  buildRoboticsHardwareGeometry,
+} from '../engines/electronics/roboticsHardwareLibrary';
 
 describe('3D Parts Library, 2D-3D CAD, Code DSL & Mesh Sculpting', () => {
   it('covers all 5 part categories and builds finite geometries for every library entry', () => {
@@ -153,5 +161,30 @@ describe('3D Parts Library, 2D-3D CAD, Code DSL & Mesh Sculpting', () => {
     expect(subStats.triangles).toBe(initialStats.triangles * 4);
 
     engine.dispose();
+  });
+
+  it('builds all 22 procedural multi-color 3D robotics hardware models with vertex colors & pins', () => {
+    expect(ROBOTICS_HARDWARE_CATALOG).toHaveLength(22);
+
+    for (const item of ROBOTICS_HARDWARE_CATALOG) {
+      expect(item.pins.length).toBeGreaterThanOrEqual(2);
+      expect(item.specs.mcu).toBeTruthy();
+
+      const geom = buildRoboticsHardwareGeometry(item.id);
+      const pos = geom.getAttribute('position');
+      const col = geom.getAttribute('color');
+      expect(pos.count).toBeGreaterThan(0);
+      expect(col).toBeDefined();
+      expect(col.count).toBe(pos.count);
+
+      const serialized = serializeBufferGeometry(geom);
+      expect(serialized.colors).toBeDefined();
+      expect(serialized.colors!.length).toBe(serialized.positions.length);
+
+      const restored = deserializeMeshData(serialized);
+      expect(restored.getAttribute('color').count).toBe(pos.count);
+      geom.dispose();
+      restored.dispose();
+    }
   });
 });

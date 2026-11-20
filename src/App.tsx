@@ -65,6 +65,14 @@ import {
   type Circuit3DSceneHandle,
 } from './engines/electronics/circuitEngine';
 import {
+  WORKBENCH_MISSIONS,
+  buildWorkbench3DScene,
+  createInitialWorkbenchConfig,
+  type Workbench3DHandle,
+  type WorkbenchConfig,
+  type WorkbenchWire,
+} from './engines/electronics/workbench3D';
+import {
   PARAMETRIC_PRESETS,
   buildParametricSurface,
   createDefaultParametricConfig,
@@ -255,7 +263,13 @@ export const App: React.FC = () => {
   // Mesh Sculpt State
   const [meshConfig, setMeshConfig] = useState<MeshSculptConfig>(() => createDefaultMeshSculptConfig());
 
-  // Electronics Circuit State
+  // Electronics Workbench & Circuit State
+  const [electronicsSubMode, setElectronicsSubMode] = useState<'workbench' | 'circuit'>(
+    'workbench'
+  );
+  const [workbenchConfig, setWorkbenchConfig] = useState<WorkbenchConfig>(() =>
+    createInitialWorkbenchConfig()
+  );
   const circuitPresets = useMemo(() => getCircuitPresets(), []);
   const [circuit, setCircuit] = useState<CircuitSchematic>(() =>
     structuredClone(circuitPresets[0])
@@ -394,12 +408,20 @@ export const App: React.FC = () => {
   }, []);
 
   const rebuildElectronicsViewport = useCallback(
-    (sch: CircuitSchematic, solved: ReturnType<typeof solveCircuit>) => {
+    (
+      subMode: 'workbench' | 'circuit',
+      wbCfg: WorkbenchConfig,
+      sch: CircuitSchematic,
+      solved: ReturnType<typeof solveCircuit>
+    ) => {
       const vp = viewportRef.current;
       if (!vp) return;
       circuit3DHandleRef.current?.dispose();
       vp.electronicsGroup.clear();
-      const handle = buildCircuit3DPCBGroup(sch, solved);
+      const handle: Circuit3DSceneHandle | Workbench3DHandle =
+        subMode === 'workbench'
+          ? buildWorkbench3DScene(wbCfg)
+          : buildCircuit3DPCBGroup(sch, solved);
       vp.electronicsGroup.add(handle.group);
       circuit3DHandleRef.current = handle;
       if (modeRef.current === 'electronics') {
@@ -855,10 +877,10 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Live 3D PCB sync when circuit schematic or switch state changes
+  // Live 3D Workbench & PCB sync when board, modules, wires, or schematic change
   useEffect(() => {
-    rebuildElectronicsViewport(circuit, circuitSolved);
-  }, [circuit, circuitSolved, rebuildElectronicsViewport]);
+    rebuildElectronicsViewport(electronicsSubMode, workbenchConfig, circuit, circuitSolved);
+  }, [electronicsSubMode, workbenchConfig, circuit, circuitSolved, rebuildElectronicsViewport]);
 
   // Sync mode visibility & stage settings
   useEffect(() => {
@@ -1032,8 +1054,12 @@ export const App: React.FC = () => {
     } else if (nextMode === 'mesh') {
       syncMeshViewport();
     } else if (nextMode === 'electronics') {
-      rebuildElectronicsViewport(circuit, circuitSolved);
-      if (typeof window !== 'undefined' && window.innerWidth >= 900) {
+      rebuildElectronicsViewport(electronicsSubMode, workbenchConfig, circuit, circuitSolved);
+      if (
+        electronicsSubMode === 'circuit' &&
+        typeof window !== 'undefined' &&
+        window.innerWidth >= 900
+      ) {
         setSchematicOpen(true);
       }
     } else if (nextMode === 'physics') {
@@ -1592,7 +1618,61 @@ export const App: React.FC = () => {
     setMode('cad');
   };
 
-  // Electronics Circuit actions
+  // Electronics Workbench & Circuit actions
+  const handleSelectWorkbenchBoard = (boardId: string) => {
+    setWorkbenchConfig((prev) => ({ ...prev, boardId }));
+  };
+
+  const handleSelectWorkbenchMission = (missionId: string) => {
+    const m = WORKBENCH_MISSIONS.find((x) => x.id === missionId);
+    if (!m) return;
+    setWorkbenchConfig((prev) => ({
+      ...prev,
+      boardId: m.boardId,
+      missionId: m.id,
+      modules: structuredClone(m.modules),
+      wires: structuredClone(m.wires),
+    }));
+  };
+
+  const handleAddWorkbenchModule = (specId: string) => {
+    setWorkbenchConfig((prev) => {
+      const idx = prev.modules.length;
+      const col = idx % 2;
+      const row = Math.floor(idx / 2);
+      const nextMod = {
+        instanceId: `mod-${specId}-${Date.now()}`,
+        specId,
+        position: [1.35 + col * 1.15, 0.08, -0.75 + row * 0.9] as Vec3,
+        rotationY: 0,
+      };
+      return { ...prev, modules: [...prev.modules, nextMod] };
+    });
+  };
+
+  const handleClearWorkbenchWires = () => {
+    setWorkbenchConfig((prev) => ({ ...prev, wires: [] }));
+  };
+
+  const handleAddWorkbenchWire = (wire: WorkbenchWire) => {
+    setWorkbenchConfig((prev) => ({ ...prev, wires: [...prev.wires, wire] }));
+  };
+
+  const handleRemoveWorkbenchWire = (wireId: string) => {
+    setWorkbenchConfig((prev) => ({
+      ...prev,
+      wires: prev.wires.filter((w) => w.id !== wireId),
+    }));
+  };
+
+  const handleRemoveWorkbenchModule = (instanceId: string) => {
+    setWorkbenchConfig((prev) => ({
+      ...prev,
+      modules: prev.modules.filter((m) => m.instanceId !== instanceId),
+      wires: prev.wires.filter((w) => w.fromTarget !== instanceId && w.toTarget !== instanceId),
+    }));
+  };
+
   const handleLoadCircuitPreset = (id: string) => {
     const found = circuitPresets.find((c) => c.id === id);
     if (!found) return;
@@ -2194,6 +2274,12 @@ export const App: React.FC = () => {
             meshConfig={meshConfig}
             onSelectSculptPreset={handleSelectSculptPreset}
             onSelectSculptBrush={(b: SculptBrushKind) => setMeshConfig((m) => ({ ...m, brush: b }))}
+            electronicsSubMode={electronicsSubMode}
+            onElectronicsSubModeChange={setElectronicsSubMode}
+            workbenchConfig={workbenchConfig}
+            onSelectWorkbenchBoard={handleSelectWorkbenchBoard}
+            onSelectWorkbenchMission={handleSelectWorkbenchMission}
+            onAddWorkbenchModule={handleAddWorkbenchModule}
             circuitPresets={circuitPresets}
             activeCircuitId={circuit.id}
             onLoadCircuitPreset={handleLoadCircuitPreset}
@@ -2259,7 +2345,7 @@ export const App: React.FC = () => {
             />
 
             <ElectronicsSchematicView
-              open={schematicOpen && mode === 'electronics'}
+              open={schematicOpen && mode === 'electronics' && electronicsSubMode === 'circuit'}
               schematic={circuit}
               solved={circuitSolved}
               selectedCompId={selectedCircuitCompId}
@@ -2367,6 +2453,15 @@ export const App: React.FC = () => {
             onUndoMesh={handleUndoMesh}
             onSendMeshToPhysics={handleSendMeshToPhysics}
             onSendMeshToCad={handleSendMeshToCad}
+            electronicsSubMode={electronicsSubMode}
+            onElectronicsSubModeChange={setElectronicsSubMode}
+            workbenchConfig={workbenchConfig}
+            onUpdateWorkbenchConfig={setWorkbenchConfig}
+            onSelectWorkbenchMission={handleSelectWorkbenchMission}
+            onClearWorkbenchWires={handleClearWorkbenchWires}
+            onAddWorkbenchWire={handleAddWorkbenchWire}
+            onRemoveWorkbenchWire={handleRemoveWorkbenchWire}
+            onRemoveWorkbenchModule={handleRemoveWorkbenchModule}
             circuit={circuit}
             circuitSolved={circuitSolved}
             selectedCircuitCompId={selectedCircuitCompId}

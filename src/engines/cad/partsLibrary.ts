@@ -6,6 +6,10 @@ import type {
   Vec3,
 } from '../../types/studio';
 import { createParametricGeometry, serializeBufferGeometry } from './parametricGenerators';
+import {
+  ROBOTICS_HARDWARE_CATALOG,
+  buildRoboticsHardwareGeometry,
+} from '../electronics/roboticsHardwareLibrary';
 
 export interface LibraryPartMeta {
   id: string;
@@ -15,7 +19,15 @@ export interface LibraryPartMeta {
   defaultColor: string;
 }
 
-export const PART_LIBRARY: LibraryPartMeta[] = [
+const HARDWARE_LIBRARY_ITEMS: LibraryPartMeta[] = ROBOTICS_HARDWARE_CATALOG.map((item) => ({
+  id: item.id,
+  name: item.name,
+  category: item.category,
+  description: `${item.summary} (${item.logicVoltage})`,
+  defaultColor: item.defaultColor,
+}));
+
+const BASE_PART_LIBRARY: LibraryPartMeta[] = [
   // Robotics
   {
     id: 'servo-motor',
@@ -195,6 +207,11 @@ export const PART_LIBRARY: LibraryPartMeta[] = [
   },
 ];
 
+export const PART_LIBRARY: LibraryPartMeta[] = [
+  ...HARDWARE_LIBRARY_ITEMS,
+  ...BASE_PART_LIBRARY,
+];
+
 function mergeGeometriesList(geoms: THREE.BufferGeometry[]): THREE.BufferGeometry {
   const cleanNonIndexed: THREE.BufferGeometry[] = [];
   let totalVerts = 0;
@@ -264,6 +281,9 @@ function addPiece(
 }
 
 export function buildLibraryPartGeometry(partId: string): THREE.BufferGeometry {
+  if (ROBOTICS_HARDWARE_CATALOG.some((h) => h.id === partId)) {
+    return buildRoboticsHardwareGeometry(partId);
+  }
   const pieces: THREE.BufferGeometry[] = [];
 
   switch (partId) {

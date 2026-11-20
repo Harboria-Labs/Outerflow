@@ -44,6 +44,7 @@ export interface SerializedMeshData {
   positions: number[];
   normals: number[];
   indices?: number[];
+  colors?: number[];
 }
 
 export interface StudioEntity {

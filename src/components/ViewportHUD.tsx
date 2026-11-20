@@ -83,7 +83,7 @@ export const ViewportHUD: React.FC<ViewportHUDProps> = ({
 }) => {
   const [helpOpen, setHelpOpen] = useState(false);
   const [toolExpanded, setToolExpanded] = useState(false);
-  const [toolPos, setToolPos] = useState<{ x: number; y: number }>({ x: 14, y: 78 });
+  const [toolPos, setToolPos] = useState<{ x: number; y: number }>({ x: 14, y: 120 });
   const dragStateRef = useRef<{
     startX: number;
     startY: number;

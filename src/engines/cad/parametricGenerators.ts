@@ -336,11 +336,15 @@ export function serializeBufferGeometry(geometry: THREE.BufferGeometry): Seriali
     nrmAttr = nonIdx.getAttribute('normal');
   }
   const indexAttr = nonIdx.getIndex();
+  const colorAttr = nonIdx.getAttribute('color');
 
   return {
     positions: Array.from(posAttr.array as Float32Array),
     normals: nrmAttr ? Array.from(nrmAttr.array as Float32Array) : [],
     indices: indexAttr ? Array.from(indexAttr.array as Uint16Array | Uint32Array) : undefined,
+    colors: colorAttr
+      ? Array.from(colorAttr.array as Float32Array).map((n) => Number(n.toFixed(4)))
+      : undefined,
   };
 }
 
@@ -351,6 +355,9 @@ export function deserializeMeshData(data: SerializedMeshData): THREE.BufferGeome
     geom.setAttribute('normal', new THREE.Float32BufferAttribute(data.normals, 3));
   } else {
     geom.computeVertexNormals();
+  }
+  if (data.colors && data.colors.length === data.positions.length) {
+    geom.setAttribute('color', new THREE.Float32BufferAttribute(data.colors, 3));
   }
   if (data.indices && data.indices.length > 0) {
     geom.setIndex(data.indices);
