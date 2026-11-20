@@ -1,4 +1,11 @@
-export type StudioMode = 'physics' | 'cad' | 'math' | 'soft' | 'experiments';
+export type StudioMode =
+  | 'physics'
+  | 'cad'
+  | 'mesh'
+  | 'electronics'
+  | 'math'
+  | 'soft'
+  | 'experiments';
 
 export type Vec3 = [number, number, number];
 
@@ -42,7 +49,7 @@ export interface SerializedMeshData {
 export interface StudioEntity {
   id: string;
   name: string;
-  category: 'physics' | 'cad' | 'math';
+  category: 'physics' | 'cad' | 'math' | 'mesh' | 'electronics';
   shape: ShapeKind;
   bodyType: BodyType;
   position: Vec3;
@@ -86,6 +93,21 @@ export type CadPrimitiveKind =
 
 export type CsgOperation = 'union' | 'subtract' | 'intersect';
 
+export type PartCategory =
+  | 'robotics'
+  | 'electronics'
+  | 'mechanical'
+  | 'human'
+  | 'shapes';
+
+export type SnapMode = 'onTop' | 'inFront' | 'toRight' | 'centerAlign' | 'ground';
+
+export interface Sketch2DConfig {
+  points: [number, number][];
+  mode: 'extrude' | 'lathe';
+  depth: number;
+}
+
 export interface CadPartConfig {
   id: string;
   name: string;
@@ -94,6 +116,9 @@ export interface CadPartConfig {
   rotation: Vec3;
   color: string;
   visible: boolean;
+  locked?: boolean;
+  libraryPartId?: string;
+  sketch2D?: Sketch2DConfig;
   // Shared / parametric dimensions
   width: number;
   height: number;
@@ -106,8 +131,80 @@ export interface CadPartConfig {
   holeRadius: number;
   sides: number;
   latheCurve: 'nozzle' | 'bell' | 'hourglass' | 'coneCup';
-  // If produced by a CSG boolean operation
+  // If produced by a CSG boolean operation, Code CAD, or Library part
   csgMesh?: SerializedMeshData;
+}
+
+// ---------- Mesh Sculpting Types ----------
+export type SculptBrushKind = 'pull' | 'inflate' | 'carve' | 'smooth' | 'flatten';
+
+export type SculptBasePreset =
+  | 'sphere'
+  | 'humanHead'
+  | 'organicPod'
+  | 'cube'
+  | 'torus'
+  | 'terrain';
+
+export interface MeshSculptConfig {
+  basePreset: SculptBasePreset;
+  brush: SculptBrushKind;
+  radius: number;
+  strength: number;
+  symmetryX: boolean;
+  twist: number;
+  taper: number;
+  noise: number;
+}
+
+// ---------- Proteus-Style Electronics Types ----------
+export type CircuitComponentKind =
+  | 'battery'
+  | 'resistor'
+  | 'led'
+  | 'capacitor'
+  | 'switch'
+  | 'motor'
+  | 'mcu';
+
+export interface CircuitComponent {
+  id: string;
+  name: string;
+  kind: CircuitComponentKind;
+  nodeA: string; // + or terminal A
+  nodeB: string; // - or terminal B
+  value: number; // V for battery/mcu, Ohms for resistor/motor, uF for capacitor, Vf for LED
+  closed?: boolean; // for switch
+  x: number; // 2D schematic X (0..700)
+  y: number; // 2D schematic Y (0..420)
+  color?: string;
+}
+
+export interface CircuitWire {
+  id: string;
+  fromCompId: string;
+  fromPin: 'A' | 'B';
+  toCompId: string;
+  toPin: 'A' | 'B';
+  nodeName: string;
+}
+
+export interface CircuitSchematic {
+  id: string;
+  name: string;
+  description: string;
+  components: CircuitComponent[];
+  wires: CircuitWire[];
+}
+
+export interface CircuitSolveResult {
+  nodeVoltages: Record<string, number>;
+  branchCurrents: Record<string, number>; // Amps
+  componentPower: Record<string, number>; // Watts
+  ledBrightness: Record<string, number>; // 0..1
+  motorRpm: Record<string, number>;
+  warnings: string[];
+  transientTrace: Array<{ tMs: number; voltage: number; currentMa: number }>;
 }
 
 // ---------- Math Types ----------

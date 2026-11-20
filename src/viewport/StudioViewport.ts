@@ -25,6 +25,9 @@ export interface ViewportCallbacks {
     rotation: Vec3,
     scale: Vec3
   ) => void;
+  onSculptStart?: (point: THREE.Vector3, normal: THREE.Vector3) => void;
+  onSculptMove?: (point: THREE.Vector3, normal: THREE.Vector3) => void;
+  onSculptEnd?: () => void;
 }
 
 export function createDefaultStageSettings(): StageSettings {
@@ -58,6 +61,8 @@ export class StudioViewport {
   readonly colliderDebugGroup = new THREE.Group();
   readonly jointDebugGroup = new THREE.Group();
   readonly cadGroup = new THREE.Group();
+  readonly meshGroup = new THREE.Group();
+  readonly electronicsGroup = new THREE.Group();
   readonly mathGroup = new THREE.Group();
   readonly softGroup = new THREE.Group();
 
@@ -83,6 +88,7 @@ export class StudioViewport {
   private resizeObserver: ResizeObserver;
   private pointerDownPos = { x: 0, y: 0 };
   private isDraggingGizmo = false;
+  private isSculpting = false;
   private raycaster = new THREE.Raycaster();
   private ndc = new THREE.Vector2();
 
@@ -240,6 +246,8 @@ export class StudioViewport {
     this.scene.add(this.colliderDebugGroup);
     this.scene.add(this.jointDebugGroup);
     this.scene.add(this.cadGroup);
+    this.scene.add(this.meshGroup);
+    this.scene.add(this.electronicsGroup);
     this.scene.add(this.mathGroup);
     this.scene.add(this.softGroup);
 
@@ -247,14 +255,51 @@ export class StudioViewport {
     this.resizeObserver.observe(container);
 
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown);
+    this.renderer.domElement.addEventListener('pointermove', this.handlePointerMove);
     this.renderer.domElement.addEventListener('pointerup', this.handlePointerUp);
+  }
+
+  private raycastMeshGroup(e: PointerEvent): { point: THREE.Vector3; normal: THREE.Vector3 } | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    this.ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.ndc, this.camera);
+    const hits = this.raycaster.intersectObjects(this.meshGroup.children, true);
+    if (hits.length === 0) return null;
+    const hit = hits[0];
+    const normal = hit.face
+      ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize()
+      : new THREE.Vector3(0, 1, 0);
+    return { point: hit.point.clone(), normal };
   }
 
   private handlePointerDown = (e: PointerEvent) => {
     this.pointerDownPos = { x: e.clientX, y: e.clientY };
+    if (this.activeMode === 'mesh' && e.button === 0) {
+      const hit = this.raycastMeshGroup(e);
+      if (hit) {
+        this.isSculpting = true;
+        this.orbit.enabled = false;
+        this.callbacks.onSculptStart?.(hit.point, hit.normal);
+      }
+    }
+  };
+
+  private handlePointerMove = (e: PointerEvent) => {
+    if (!this.isSculpting) return;
+    const hit = this.raycastMeshGroup(e);
+    if (hit) {
+      this.callbacks.onSculptMove?.(hit.point, hit.normal);
+    }
   };
 
   private handlePointerUp = (e: PointerEvent) => {
+    if (this.isSculpting) {
+      this.isSculpting = false;
+      this.orbit.enabled = true;
+      this.callbacks.onSculptEnd?.();
+      return;
+    }
     if (this.isDraggingGizmo) return;
     const dist = Math.hypot(e.clientX - this.pointerDownPos.x, e.clientY - this.pointerDownPos.y);
     if (dist > 5) return;
@@ -296,6 +341,8 @@ export class StudioViewport {
     this.jointDebugGroup.visible = showPhysics;
     this.colliderDebugGroup.visible = showPhysics && this.stage.showColliders;
     this.cadGroup.visible = mode === 'cad';
+    this.meshGroup.visible = mode === 'mesh';
+    this.electronicsGroup.visible = mode === 'electronics';
     this.mathGroup.visible = mode === 'math';
     this.softGroup.visible = mode === 'soft';
 
@@ -341,7 +388,7 @@ export class StudioViewport {
     }
     if (this.activeMode === 'cad') {
       const mesh = this.cadMeshes.get(this.selectedId);
-      if (mesh && mesh.visible) this.transform.attach(mesh);
+      if (mesh && mesh.visible && !mesh.userData.locked) this.transform.attach(mesh);
       else this.transform.detach();
     } else if (this.activeMode === 'physics' || this.activeMode === 'experiments') {
       const mesh = this.entityMeshes.get(this.selectedId);
@@ -403,7 +450,7 @@ export class StudioViewport {
   }
 
   applyStageToDomainGroups(): void {
-    const groups = [this.physicsGroup, this.cadGroup, this.mathGroup];
+    const groups = [this.physicsGroup, this.cadGroup, this.meshGroup, this.mathGroup];
     this.solidMaterial.wireframe = this.stage.wireframe;
     this.normalMaterial.wireframe = this.stage.wireframe;
 
@@ -691,6 +738,7 @@ export class StudioViewport {
       mesh.userData = {
         id: part.id,
         kind: 'cad',
+        locked: Boolean(part.locked),
         baseMaterial: mat,
         basePos: [...part.position] as Vec3,
       };
@@ -718,6 +766,8 @@ export class StudioViewport {
 
   getExportTarget(mode: StudioMode): THREE.Object3D {
     if (mode === 'cad') return this.cadGroup;
+    if (mode === 'mesh') return this.meshGroup;
+    if (mode === 'electronics') return this.electronicsGroup;
     if (mode === 'math') return this.mathGroup;
     if (mode === 'soft') return this.softGroup;
     return this.physicsGroup;
@@ -744,6 +794,7 @@ export class StudioViewport {
   dispose(): void {
     this.resizeObserver.disconnect();
     this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);
+    this.renderer.domElement.removeEventListener('pointermove', this.handlePointerMove);
     this.renderer.domElement.removeEventListener('pointerup', this.handlePointerUp);
     this.transform.dispose();
     this.orbit.dispose();

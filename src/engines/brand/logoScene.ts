@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { LogoStudioConfig } from '../../types/studio';
 
 const STORAGE_KEY = 'outerflow-logo-config-v1';
@@ -75,7 +74,7 @@ export function computeIntroTimeline(progressRaw: number): IntroTimelineSample {
 
 function createRingGeometries(variant: LogoStudioConfig['variant']): THREE.BufferGeometry[] {
   if (variant === 'morphogenesis') {
-    return [new THREE.TorusKnotGeometry(1.18, 0.085, 160, 24, 2, 3)];
+    return [new THREE.TorusKnotGeometry(1.18, 0.085, 110, 16, 2, 3)];
   }
   if (variant === 'bioGyroid') {
     const g1 = new THREE.TorusGeometry(1.32, 0.06, 20, 96);
@@ -289,7 +288,6 @@ export class OuterflowLogoRenderer {
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
-  private envTarget: THREE.WebGLRenderTarget;
   private rootGroup: THREE.Group;
   private ringGroup: THREE.Group;
   private coreMesh: THREE.Mesh;
@@ -300,6 +298,7 @@ export class OuterflowLogoRenderer {
   private config: LogoStudioConfig;
   private currentVariant: LogoStudioConfig['variant'];
   private currentParticleCount: number;
+  private hemiLight: THREE.HemisphereLight;
   private keyLight: THREE.DirectionalLight;
   private rimLightA: THREE.PointLight;
   private rimLightB: THREE.PointLight;
@@ -314,8 +313,9 @@ export class OuterflowLogoRenderer {
       alpha: true,
       antialias: true,
       preserveDrawingBuffer: true,
+      powerPreference: 'high-performance',
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.15;
 
@@ -325,23 +325,18 @@ export class OuterflowLogoRenderer {
     this.camera = new THREE.PerspectiveCamera(40, 16 / 9, 0.1, 100);
     this.camera.position.set(0, 0.15, 5.8);
 
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    const room = new RoomEnvironment();
-    this.envTarget = pmrem.fromScene(room, 0.04);
-    this.scene.environment = this.envTarget.texture;
-    this.scene.environmentIntensity = 0.9;
-    room.dispose();
-    pmrem.dispose();
+    this.hemiLight = new THREE.HemisphereLight('#cbd5e1', '#09090b', 0.9);
+    this.scene.add(this.hemiLight);
 
-    this.keyLight = new THREE.DirectionalLight('#ffffff', 1.8);
+    this.keyLight = new THREE.DirectionalLight('#ffffff', 2.2);
     this.keyLight.position.set(4, 6, 5);
     this.scene.add(this.keyLight);
 
-    this.rimLightA = new THREE.PointLight(initialConfig.secondaryColor, 6, 14);
+    this.rimLightA = new THREE.PointLight(initialConfig.secondaryColor, 8, 16);
     this.rimLightA.position.set(-3.2, 2.1, 2.5);
     this.scene.add(this.rimLightA);
 
-    this.rimLightB = new THREE.PointLight(initialConfig.accentColor, 5, 14);
+    this.rimLightB = new THREE.PointLight(initialConfig.accentColor, 6, 16);
     this.rimLightB.position.set(3.2, -1.8, 2.0);
     this.scene.add(this.rimLightB);
 
@@ -350,16 +345,16 @@ export class OuterflowLogoRenderer {
 
     // Sculpted outer ring
     this.ringMat = new THREE.MeshStandardMaterial({
-      color: '#1b1f29',
-      metalness: 0.92,
-      roughness: 0.18,
+      color: '#252b38',
+      metalness: 0.85,
+      roughness: 0.22,
     });
     this.ringGroup = new THREE.Group();
     this.rebuildRingMeshes(initialConfig.variant);
     this.rootGroup.add(this.ringGroup);
 
-    // Living fluid core
-    const coreGeom = new THREE.IcosahedronGeometry(0.68, 5);
+    // Living fluid core (subdivision 4 = 5,120 tris for locked 60fps on all GPUs)
+    const coreGeom = new THREE.IcosahedronGeometry(0.68, 4);
     this.coreMat = new THREE.ShaderMaterial({
       vertexShader: FLUID_VERT_SHADER,
       fragmentShader: FLUID_FRAG_SHADER,
@@ -486,7 +481,11 @@ export class OuterflowLogoRenderer {
       camZ = tl.cameraZ;
     }
 
-    this.camera.position.z = camZ;
+    // Automatically adapt camera distance for portrait / narrow screens
+    const aspect = this.camera.aspect || 1;
+    const responsiveZ = aspect < 1 ? camZ / Math.max(0.55, aspect) : camZ;
+
+    this.camera.position.z = responsiveZ;
     this.camera.lookAt(0, 0, 0);
 
     const spin = 0.25 + this.config.fluidity * 0.28;
@@ -521,7 +520,6 @@ export class OuterflowLogoRenderer {
     this.coreMat.dispose();
     this.points.geometry.dispose();
     this.pointsMat.dispose();
-    this.envTarget.dispose();
     this.renderer.dispose();
   }
 }

@@ -5,14 +5,21 @@ import type {
   CadPartConfig,
   CadPrimitiveKind,
   CameraPreset,
+  CircuitComponent,
+  CircuitComponentKind,
+  CircuitSchematic,
   CsgOperation,
   GizmoMode,
   LogoStudioConfig,
   MathConfig,
   MathModeKind,
+  MeshSculptConfig,
   OuterflowSceneFile,
   RecordedFrame,
+  SculptBasePreset,
+  SculptBrushKind,
   ShapeKind,
+  SnapMode,
   SoftSimConfig,
   SoftSimKind,
   StageSettings,
@@ -34,6 +41,26 @@ import {
   serializeBufferGeometry,
 } from './engines/cad/parametricGenerators';
 import { csgIntersect, csgSubtract, csgUnion } from './engines/cad/csg';
+import {
+  computeSnapPosition,
+  createCadPartFromLibrary,
+  type LibraryPartMeta,
+} from './engines/cad/partsLibrary';
+import {
+  buildBlueprintSVGString,
+  buildGeometryFrom2DSketch,
+  projectGeometryTo2DBlueprint,
+  type BlueprintProjection,
+} from './engines/cad/sketch2D';
+import { DESIGN_CODE_TEMPLATES, executeDesignCode } from './engines/cad/designCompiler';
+import { MeshSculptEngine, createDefaultMeshSculptConfig } from './engines/mesh/meshSculptEngine';
+import {
+  buildCircuit3DPCBGroup,
+  createComponentTemplate,
+  getCircuitPresets,
+  solveCircuit,
+  type Circuit3DSceneHandle,
+} from './engines/electronics/circuitEngine';
 import {
   PARAMETRIC_PRESETS,
   buildParametricSurface,
@@ -98,6 +125,7 @@ import { RightPanel } from './components/RightPanel';
 import { ViewportHUD } from './components/ViewportHUD';
 import { TransportBar } from './components/TransportBar';
 import { TelemetryDrawer } from './components/TelemetryDrawer';
+import { ElectronicsSchematicView } from './components/ElectronicsSchematicView';
 
 function createInitialMathConfig(): MathConfig {
   return {
@@ -122,8 +150,12 @@ export const App: React.FC = () => {
   const [simTime, setSimTime] = useState(0);
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('translate');
   const [stage, setStage] = useState<StageSettings>(() => createDefaultStageSettings());
-  const [leftCollapsed, setLeftCollapsed] = useState(false);
-  const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [leftCollapsed, setLeftCollapsed] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 1024 : false
+  );
+  const [rightCollapsed, setRightCollapsed] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 1024 : false
+  );
   const [telemetryOpen, setTelemetryOpen] = useState(false);
   const [meshStats, setMeshStats] = useState({ vertices: 0, triangles: 0 });
   const [logoConfig, setLogoConfig] = useState<LogoStudioConfig>(() => loadSavedLogoConfig());
@@ -146,8 +178,25 @@ export const App: React.FC = () => {
     initialPreset.entities[1]?.id ?? null
   );
 
-  // CAD State
+  // CAD State + 2D<->3D & Design Code
   const [cadParts, setCadParts] = useState<CadPartConfig[]>(() => createDefaultCadParts());
+  const [blueprintProjection, setBlueprintProjection] = useState<BlueprintProjection | null>(null);
+  const [designCode, setDesignCode] = useState<string>(DESIGN_CODE_TEMPLATES[0].code);
+  const [designCodeError, setDesignCodeError] = useState<string | null>(null);
+
+  // Mesh Sculpt State
+  const [meshConfig, setMeshConfig] = useState<MeshSculptConfig>(() => createDefaultMeshSculptConfig());
+
+  // Electronics Circuit State
+  const circuitPresets = useMemo(() => getCircuitPresets(), []);
+  const [circuit, setCircuit] = useState<CircuitSchematic>(() =>
+    structuredClone(circuitPresets[0])
+  );
+  const circuitSolved = useMemo(() => solveCircuit(circuit), [circuit]);
+  const [selectedCircuitCompId, setSelectedCircuitCompId] = useState<string | null>(
+    () => circuitPresets[0].components[0]?.id ?? null
+  );
+  const [schematicOpen, setSchematicOpen] = useState(false);
 
   // Math State
   const [mathConfig, setMathConfig] = useState<MathConfig>(() => createInitialMathConfig());
@@ -193,6 +242,8 @@ export const App: React.FC = () => {
   const gravityRef = useRef(gravity);
   const mathConfigRef = useRef(mathConfig);
   const softConfigRef = useRef(softConfig);
+  const meshConfigRef = useRef(meshConfig);
+  const introOverlayModeRef = useRef(introOverlayMode);
 
   modeRef.current = mode;
   runningRef.current = running;
@@ -205,6 +256,8 @@ export const App: React.FC = () => {
   gravityRef.current = gravity;
   mathConfigRef.current = mathConfig;
   softConfigRef.current = softConfig;
+  meshConfigRef.current = meshConfig;
+  introOverlayModeRef.current = introOverlayMode;
 
   const mathRuntimeRef = useRef<{
     explicitGeom?: THREE.BufferGeometry;
@@ -223,16 +276,70 @@ export const App: React.FC = () => {
     wave?: WaveTankSolver;
   }>({});
 
+  const sculptEngineRef = useRef<MeshSculptEngine | null>(null);
+  const sculptMeshRef = useRef<THREE.Mesh | null>(null);
+  const circuit3DHandleRef = useRef<Circuit3DSceneHandle | null>(null);
+
   const scriptStepCallbackRef = useRef<((t: number, api: StepRuntimeApi) => void) | null>(null);
   const customMetricsRef = useRef<Record<string, number>>({});
   const physicsRebuildPendingRef = useRef(false);
   const skipCadRebuildRef = useRef(false);
 
   const refreshStats = useCallback((activeMode: StudioMode) => {
+    if (activeMode === 'mesh' && sculptEngineRef.current) {
+      setMeshStats(sculptEngineRef.current.getStats());
+      return;
+    }
     const vp = viewportRef.current;
     if (!vp) return;
     setMeshStats(vp.getSceneMeshStats(activeMode));
   }, []);
+
+  const syncMeshViewport = useCallback(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    if (!sculptEngineRef.current) {
+      sculptEngineRef.current = new MeshSculptEngine(meshConfigRef.current.basePreset);
+    }
+    const engine = sculptEngineRef.current;
+    vp.meshGroup.traverse((obj) => {
+      const m = obj as THREE.Mesh;
+      const base = m.userData?.baseMaterial as THREE.Material | undefined;
+      base?.dispose();
+    });
+    vp.meshGroup.clear();
+
+    const mat = new THREE.MeshStandardMaterial({
+      color: '#a8b3cf',
+      metalness: 0.22,
+      roughness: 0.42,
+    });
+    const mesh = new THREE.Mesh(engine.geometry, mat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.userData = { id: 'sculpt-mesh', kind: 'mesh', baseMaterial: mat };
+    vp.meshGroup.add(mesh);
+    sculptMeshRef.current = mesh;
+    if (modeRef.current === 'mesh') {
+      setMeshStats(engine.getStats());
+    }
+  }, []);
+
+  const rebuildElectronicsViewport = useCallback(
+    (sch: CircuitSchematic, solved: ReturnType<typeof solveCircuit>) => {
+      const vp = viewportRef.current;
+      if (!vp) return;
+      circuit3DHandleRef.current?.dispose();
+      vp.electronicsGroup.clear();
+      const handle = buildCircuit3DPCBGroup(sch, solved);
+      vp.electronicsGroup.add(handle.group);
+      circuit3DHandleRef.current = handle;
+      if (modeRef.current === 'electronics') {
+        refreshStats('electronics');
+      }
+    },
+    [refreshStats]
+  );
 
   const syncPhysicsWorldAndViewport = useCallback(
     async (nextEntities: StudioEntity[], nextJoints: StudioJoint[], nextGravity: Vec3) => {
@@ -418,6 +525,31 @@ export const App: React.FC = () => {
           );
         }
       },
+      onSculptStart: (worldPt, worldNrm) => {
+        const engine = sculptEngineRef.current;
+        const mesh = sculptMeshRef.current;
+        if (!engine || !mesh) return;
+        engine.pushUndoSnapshot();
+        mesh.updateMatrixWorld();
+        const invMat = mesh.matrixWorld.clone().invert();
+        const localPt = worldPt.clone().applyMatrix4(invMat);
+        const localNrm = worldNrm.clone().transformDirection(invMat).normalize();
+        engine.applyBrushStroke(localPt, localNrm, meshConfigRef.current);
+      },
+      onSculptMove: (worldPt, worldNrm) => {
+        const engine = sculptEngineRef.current;
+        const mesh = sculptMeshRef.current;
+        if (!engine || !mesh) return;
+        const invMat = mesh.matrixWorld.clone().invert();
+        const localPt = worldPt.clone().applyMatrix4(invMat);
+        const localNrm = worldNrm.clone().transformDirection(invMat).normalize();
+        engine.applyBrushStroke(localPt, localNrm, meshConfigRef.current);
+      },
+      onSculptEnd: () => {
+        if (sculptEngineRef.current && modeRef.current === 'mesh') {
+          setMeshStats(sculptEngineRef.current.getStats());
+        }
+      },
     });
 
     viewportRef.current = vp;
@@ -427,6 +559,7 @@ export const App: React.FC = () => {
 
     void syncPhysicsWorldAndViewport(entitiesRef.current, jointsRef.current, gravityRef.current);
     vp.syncCadParts(cadParts);
+    syncMeshViewport();
     rebuildMathViewport(mathConfigRef.current);
     rebuildSoftViewport(softConfigRef.current);
     refreshStats(modeRef.current);
@@ -586,7 +719,17 @@ export const App: React.FC = () => {
         }
       }
 
-      vp.render();
+      if (activeMode === 'electronics' && circuit3DHandleRef.current) {
+        for (const rotor of circuit3DHandleRef.current.rotors) {
+          if (Math.abs(rotor.rpm) > 0.1) {
+            rotor.mesh.rotation.y += (rotor.rpm / 60) * Math.PI * 2 * scaledDt;
+          }
+        }
+      }
+
+      if (introOverlayModeRef.current === null) {
+        vp.render();
+      }
     };
 
     rafId = requestAnimationFrame(tick);
@@ -599,10 +742,17 @@ export const App: React.FC = () => {
       softRuntimeRef.current.cloth?.dispose();
       softRuntimeRef.current.sph?.dispose();
       softRuntimeRef.current.wave?.dispose();
+      sculptEngineRef.current?.dispose();
+      circuit3DHandleRef.current?.dispose();
       vp.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Live 3D PCB sync when circuit schematic or switch state changes
+  useEffect(() => {
+    rebuildElectronicsViewport(circuit, circuitSolved);
+  }, [circuit, circuitSolved, rebuildElectronicsViewport]);
 
   // Sync mode visibility & stage settings
   useEffect(() => {
@@ -656,6 +806,13 @@ export const App: React.FC = () => {
     setMode(nextMode);
     if (nextMode === 'cad') {
       setSelectedId(cadParts[0]?.id ?? null);
+    } else if (nextMode === 'mesh') {
+      syncMeshViewport();
+    } else if (nextMode === 'electronics') {
+      rebuildElectronicsViewport(circuit, circuitSolved);
+      if (typeof window !== 'undefined' && window.innerWidth >= 900) {
+        setSchematicOpen(true);
+      }
     } else if (nextMode === 'physics') {
       setSelectedId(entities[0]?.id ?? null);
       if (physicsRebuildPendingRef.current) {
@@ -772,6 +929,12 @@ export const App: React.FC = () => {
     setSelectedId(part.id);
   };
 
+  const handleAddLibraryPart = (meta: LibraryPartMeta) => {
+    const part = createCadPartFromLibrary(meta, cadParts.length + 1);
+    setCadParts((prev) => [...prev, part]);
+    setSelectedId(part.id);
+  };
+
   const handleUpdateCadPart = (id: string, patch: Partial<CadPartConfig>) => {
     const keys = Object.keys(patch);
     const transformOnly = keys.every((k) => k === 'position' || k === 'rotation');
@@ -794,12 +957,221 @@ export const App: React.FC = () => {
     setCadParts((prev) => prev.map((p) => (p.id === id ? { ...p, visible: !p.visible } : p)));
   };
 
+  const handleToggleCadLocked = (id: string) => {
+    setCadParts((prev) => prev.map((p) => (p.id === id ? { ...p, locked: !p.locked } : p)));
+  };
+
   const handleDeleteCadPart = (id: string) => {
     setCadParts((prev) => {
       const next = prev.filter((p) => p.id !== id);
       if (selectedId === id) setSelectedId(next[0]?.id ?? null);
       return next;
     });
+  };
+
+  const handleSnapCadPart = (partId: string, targetId: string | null, snapMode: SnapMode) => {
+    const partA = cadParts.find((p) => p.id === partId);
+    if (!partA) return;
+    const partB = targetId ? cadParts.find((p) => p.id === targetId) ?? null : null;
+    const snappedPos = computeSnapPosition(partA, partB, snapMode);
+    handleUpdateCadPart(partId, { position: snappedPos, locked: true });
+  };
+
+  const handleBuildFrom2DSketch = (
+    points: [number, number][],
+    sketchMode: 'extrude' | 'lathe',
+    depth: number,
+    name: string
+  ) => {
+    const geom = buildGeometryFrom2DSketch(points, sketchMode, depth, 0.03);
+    const serialized = serializeBufferGeometry(geom);
+    geom.dispose();
+    const part: CadPartConfig = {
+      ...createCadPartTemplate('box', cadParts.length + 1),
+      id: `cad-2d-${Date.now()}`,
+      name: name || '2D Profile Mesh',
+      position: [0, 1.0, 0],
+      rotation: [0, 0, 0],
+      color: '#22d3ee',
+      sketch2D: { mode: sketchMode, depth, points },
+      csgMesh: serialized,
+    };
+    setCadParts((prev) => [...prev, part]);
+    setSelectedId(part.id);
+  };
+
+  const handleProjectSelected3DTo2D = () => {
+    const part = selectedCadPart ?? cadParts[0];
+    if (!part) return;
+    const geom = createParametricGeometry(part);
+    const proj = projectGeometryTo2DBlueprint(geom);
+    geom.dispose();
+    setBlueprintProjection(proj);
+  };
+
+  const handleDownloadBlueprintSVG = () => {
+    if (!blueprintProjection) return;
+    const name = (selectedCadPart ?? cadParts[0])?.name ?? 'Part';
+    const svg = buildBlueprintSVGString(blueprintProjection, `Outerflow Blueprint — ${name}`);
+    downloadBlob(
+      new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }),
+      'outerflow-2d-blueprint.svg'
+    );
+  };
+
+  const handleRunDesignCode = () => {
+    const res = executeDesignCode(designCode);
+    if (!res.ok) {
+      setDesignCodeError(res.error ?? 'Failed to compile design script');
+      return;
+    }
+    setDesignCodeError(null);
+    if (res.parts.length > 0) {
+      setCadParts((prev) => [...prev, ...res.parts]);
+      setSelectedId(res.parts[0].id);
+    }
+  };
+
+  // Mesh Sculpt actions
+  const handleSelectSculptPreset = (preset: SculptBasePreset) => {
+    const next: MeshSculptConfig = { ...meshConfig, basePreset: preset };
+    setMeshConfig(next);
+    if (sculptEngineRef.current) {
+      sculptEngineRef.current.reset(preset);
+      sculptEngineRef.current.applyModifiers(next);
+      if (sculptMeshRef.current) {
+        sculptMeshRef.current.geometry = sculptEngineRef.current.geometry;
+      }
+      if (modeRef.current === 'mesh') {
+        setMeshStats(sculptEngineRef.current.getStats());
+      }
+    }
+  };
+
+  const handleUpdateMeshConfig = (next: MeshSculptConfig) => {
+    setMeshConfig(next);
+    if (
+      next.twist !== meshConfig.twist ||
+      next.taper !== meshConfig.taper ||
+      next.noise !== meshConfig.noise
+    ) {
+      sculptEngineRef.current?.applyModifiers(next);
+      if (modeRef.current === 'mesh' && sculptEngineRef.current) {
+        setMeshStats(sculptEngineRef.current.getStats());
+      }
+    }
+  };
+
+  const handleSubdivideMesh = () => {
+    const engine = sculptEngineRef.current;
+    if (!engine) return;
+    if (engine.applySubdivide(meshConfig) && sculptMeshRef.current) {
+      sculptMeshRef.current.geometry = engine.geometry;
+      if (modeRef.current === 'mesh') {
+        setMeshStats(engine.getStats());
+      }
+    }
+  };
+
+  const handleUndoMesh = () => {
+    const engine = sculptEngineRef.current;
+    if (!engine) return;
+    if (engine.undo(meshConfig) && modeRef.current === 'mesh') {
+      setMeshStats(engine.getStats());
+    }
+  };
+
+  const handleSendMeshToPhysics = () => {
+    const engine = sculptEngineRef.current;
+    if (!engine) return;
+    const serialized = engine.serialize();
+    const ent: StudioEntity = {
+      id: `sculpt-phys-${Date.now()}`,
+      name: `Sculpted (${meshConfig.basePreset})`,
+      category: 'cad',
+      shape: 'custom',
+      bodyType: 'dynamic',
+      position: [0, 2.2, 0],
+      rotation: [0, 0, 0],
+      scale: [1, 1, 1],
+      size: { width: 1, height: 1, depth: 1, radius: 0.5 },
+      color: '#a8b3cf',
+      metalness: 0.25,
+      roughness: 0.4,
+      opacity: 1,
+      visible: true,
+      serializedMesh: serialized,
+      physics: {
+        mass: 2.0,
+        friction: 0.55,
+        restitution: 0.3,
+        linearDamping: 0.03,
+        angularDamping: 0.05,
+        initialVelocity: [0, 0, 0],
+        colliderKind: 'convexHull',
+      },
+    };
+    const next = [...entities, ent];
+    setEntities(next);
+    setSelectedId(ent.id);
+    setMode('physics');
+    void syncPhysicsWorldAndViewport(next, joints, gravity);
+  };
+
+  const handleSendMeshToCad = () => {
+    const engine = sculptEngineRef.current;
+    if (!engine) return;
+    const serialized = engine.serialize();
+    const part: CadPartConfig = {
+      ...createCadPartTemplate('box', cadParts.length + 1),
+      id: `sculpt-cad-${Date.now()}`,
+      name: `Sculpt (${meshConfig.basePreset})`,
+      position: [0, 0.2, 0],
+      rotation: [0, 0, 0],
+      color: '#a8b3cf',
+      csgMesh: serialized,
+    };
+    setCadParts((prev) => [...prev, part]);
+    setSelectedId(part.id);
+    setMode('cad');
+  };
+
+  // Electronics Circuit actions
+  const handleLoadCircuitPreset = (id: string) => {
+    const found = circuitPresets.find((c) => c.id === id);
+    if (!found) return;
+    const cloned = structuredClone(found);
+    setCircuit(cloned);
+    setSelectedCircuitCompId(cloned.components[0]?.id ?? null);
+  };
+
+  const handleAddCircuitComponent = (kind: CircuitComponentKind) => {
+    const comp = createComponentTemplate(kind, circuit.components.length + 1);
+    setCircuit((prev) => ({ ...prev, components: [...prev.components, comp] }));
+    setSelectedCircuitCompId(comp.id);
+  };
+
+  const handleUpdateCircuitComp = (id: string, patch: Partial<CircuitComponent>) => {
+    setCircuit((prev) => ({
+      ...prev,
+      components: prev.components.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+    }));
+  };
+
+  const handleDeleteCircuitComp = (id: string) => {
+    setCircuit((prev) => ({
+      ...prev,
+      components: prev.components.filter((c) => c.id !== id),
+      wires: prev.wires.filter((w) => w.fromCompId !== id && w.toCompId !== id),
+    }));
+    if (selectedCircuitCompId === id) setSelectedCircuitCompId(null);
+  };
+
+  const handleToggleCircuitSwitch = (id: string) => {
+    setCircuit((prev) => ({
+      ...prev,
+      components: prev.components.map((c) => (c.id === id ? { ...c, closed: !c.closed } : c)),
+    }));
   };
 
   const handleRunCsg = (idA: string, idB: string, op: CsgOperation) => {
@@ -1045,6 +1417,22 @@ export const App: React.FC = () => {
       const idx = kinds.indexOf(softConfig.activeKind);
       const nextIdx = (idx + dir + kinds.length) % kinds.length;
       handleSoftKindChange(kinds[nextIdx]);
+    } else if (mode === 'mesh') {
+      const sculptPresets: SculptBasePreset[] = [
+        'humanHead',
+        'sphere',
+        'organicPod',
+        'torus',
+        'cube',
+        'terrain',
+      ];
+      const idx = sculptPresets.indexOf(meshConfig.basePreset);
+      const nextIdx = (idx + dir + sculptPresets.length) % sculptPresets.length;
+      handleSelectSculptPreset(sculptPresets[nextIdx]);
+    } else if (mode === 'electronics') {
+      const idx = circuitPresets.findIndex((c) => c.id === circuit.id);
+      const nextIdx = (idx + dir + circuitPresets.length) % circuitPresets.length;
+      handleLoadCircuitPreset(circuitPresets[nextIdx].id);
     }
   };
 
@@ -1124,6 +1512,10 @@ export const App: React.FC = () => {
       rebuildSoftViewport(softConfig);
     } else if (mode === 'math') {
       rebuildMathViewport(mathConfig);
+    } else if (mode === 'mesh') {
+      handleSelectSculptPreset(meshConfig.basePreset);
+    } else if (mode === 'electronics') {
+      handleLoadCircuitPreset(circuit.id);
     }
   };
 
@@ -1312,8 +1704,17 @@ export const App: React.FC = () => {
             onDeleteEntity={handleDeleteEntity}
             cadParts={cadParts}
             onAddCadPart={handleAddCadPart}
+            onAddLibraryPart={handleAddLibraryPart}
             onToggleCadVisible={handleToggleCadVisible}
+            onToggleCadLocked={handleToggleCadLocked}
             onDeleteCadPart={handleDeleteCadPart}
+            meshConfig={meshConfig}
+            onSelectSculptPreset={handleSelectSculptPreset}
+            onSelectSculptBrush={(b: SculptBrushKind) => setMeshConfig((m) => ({ ...m, brush: b }))}
+            circuitPresets={circuitPresets}
+            activeCircuitId={circuit.id}
+            onLoadCircuitPreset={handleLoadCircuitPreset}
+            onAddCircuitComponent={handleAddCircuitComponent}
             mathConfig={mathConfig}
             onMathKindChange={handleMathKindChange}
             onSelectMathPreset={handleSelectMathPreset}
@@ -1361,6 +1762,10 @@ export const App: React.FC = () => {
               latestTelemetry={latestTelemetry}
               gizmoMode={gizmoMode}
               onGizmoChange={setGizmoMode}
+              sculptBrush={meshConfig.brush}
+              onSculptBrushChange={(b: SculptBrushKind) =>
+                setMeshConfig((m) => ({ ...m, brush: b }))
+              }
               onCameraPreset={(p: CameraPreset) => viewportRef.current?.setCameraPreset(p)}
               onFocusSelected={() => viewportRef.current?.focusSelected()}
               onCyclePreset={handleCyclePreset}
@@ -1368,6 +1773,16 @@ export const App: React.FC = () => {
               onToggleTelemetry={() => setTelemetryOpen((o) => !o)}
               zenMode={zenMode}
               onToggleZenMode={handleToggleZenMode}
+            />
+
+            <ElectronicsSchematicView
+              open={schematicOpen && mode === 'electronics'}
+              schematic={circuit}
+              solved={circuitSolved}
+              selectedCompId={selectedCircuitCompId}
+              onSelectComp={setSelectedCircuitCompId}
+              onToggleSwitch={handleToggleCircuitSwitch}
+              onClose={() => setSchematicOpen(false)}
             />
 
             <TransportBar
@@ -1433,8 +1848,31 @@ export const App: React.FC = () => {
             cadParts={cadParts}
             selectedCadPart={selectedCadPart}
             onUpdateCadPart={handleUpdateCadPart}
+            onSnapCadPart={handleSnapCadPart}
             onRunCsg={handleRunCsg}
             onSendCadToPhysics={handleSendCadToPhysics}
+            onBuildFrom2DSketch={handleBuildFrom2DSketch}
+            blueprintProjection={blueprintProjection}
+            onProjectSelected3DTo2D={handleProjectSelected3DTo2D}
+            onDownloadBlueprintSVG={handleDownloadBlueprintSVG}
+            designCode={designCode}
+            onDesignCodeChange={setDesignCode}
+            onRunDesignCode={handleRunDesignCode}
+            designCodeError={designCodeError}
+            meshConfig={meshConfig}
+            onUpdateMeshConfig={handleUpdateMeshConfig}
+            onSubdivideMesh={handleSubdivideMesh}
+            onUndoMesh={handleUndoMesh}
+            onSendMeshToPhysics={handleSendMeshToPhysics}
+            onSendMeshToCad={handleSendMeshToCad}
+            circuit={circuit}
+            circuitSolved={circuitSolved}
+            selectedCircuitCompId={selectedCircuitCompId}
+            onSelectCircuitComp={setSelectedCircuitCompId}
+            onUpdateCircuitComp={handleUpdateCircuitComp}
+            onDeleteCircuitComp={handleDeleteCircuitComp}
+            schematicOpen={schematicOpen}
+            onToggleSchematic={() => setSchematicOpen((o) => !o)}
             mathConfig={mathConfig}
             mathErrors={mathErrors}
             mathStats={mathStats}

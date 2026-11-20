@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Activity,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Crosshair,
+  GripVertical,
   HelpCircle,
   Maximize2,
   Minimize2,
@@ -11,8 +13,15 @@ import {
   Move,
   RotateCw,
   Scale,
+  Sparkles,
 } from 'lucide-react';
-import type { CameraPreset, GizmoMode, StudioMode, TelemetrySample } from '../types/studio';
+import type {
+  CameraPreset,
+  GizmoMode,
+  SculptBrushKind,
+  StudioMode,
+  TelemetrySample,
+} from '../types/studio';
 
 interface ViewportHUDProps {
   mode: StudioMode;
@@ -25,6 +34,8 @@ interface ViewportHUDProps {
   latestTelemetry?: TelemetrySample;
   gizmoMode: GizmoMode;
   onGizmoChange: (g: GizmoMode) => void;
+  sculptBrush: SculptBrushKind;
+  onSculptBrushChange: (b: SculptBrushKind) => void;
   onCameraPreset: (p: CameraPreset) => void;
   onFocusSelected: () => void;
   onCyclePreset: (dir: -1 | 1) => void;
@@ -33,6 +44,21 @@ interface ViewportHUDProps {
   zenMode: boolean;
   onToggleZenMode: () => void;
 }
+
+const GIZMO_TOOLS: { id: GizmoMode; label: string; icon: React.ReactNode }[] = [
+  { id: 'select', label: 'Select', icon: <MousePointer size={13} /> },
+  { id: 'translate', label: 'Move', icon: <Move size={13} /> },
+  { id: 'rotate', label: 'Rotate', icon: <RotateCw size={13} /> },
+  { id: 'scale', label: 'Scale', icon: <Scale size={13} /> },
+];
+
+const SCULPT_TOOLS: { id: SculptBrushKind; label: string }[] = [
+  { id: 'pull', label: 'Pull' },
+  { id: 'inflate', label: 'Inflate' },
+  { id: 'carve', label: 'Carve' },
+  { id: 'smooth', label: 'Smooth' },
+  { id: 'flatten', label: 'Flatten' },
+];
 
 export const ViewportHUD: React.FC<ViewportHUDProps> = ({
   mode,
@@ -45,6 +71,8 @@ export const ViewportHUD: React.FC<ViewportHUDProps> = ({
   latestTelemetry,
   gizmoMode,
   onGizmoChange,
+  sculptBrush,
+  onSculptBrushChange,
   onCameraPreset,
   onFocusSelected,
   onCyclePreset,
@@ -54,13 +82,78 @@ export const ViewportHUD: React.FC<ViewportHUDProps> = ({
   onToggleZenMode,
 }) => {
   const [helpOpen, setHelpOpen] = useState(false);
-  const showGizmos = mode === 'physics' || mode === 'cad' || mode === 'experiments';
+  const [toolExpanded, setToolExpanded] = useState(false);
+  const [toolPos, setToolPos] = useState<{ x: number; y: number }>({ x: 14, y: 78 });
+  const dragStateRef = useRef<{
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+    moved: boolean;
+  } | null>(null);
 
-  // 4 clean floating KPI cards (Image 2 style)
+  const showGizmos = mode === 'physics' || mode === 'cad' || mode === 'experiments';
+  const showBrush = mode === 'mesh';
+  const showToolPill = showGizmos || showBrush;
+
+  const activeGizmo = GIZMO_TOOLS.find((t) => t.id === gizmoMode) ?? GIZMO_TOOLS[1];
+  const activeBrush = SCULPT_TOOLS.find((b) => b.id === sculptBrush) ?? SCULPT_TOOLS[0];
+
+  const handlePillPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest('button[data-tool-option]')) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragStateRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: toolPos.x,
+      origY: toolPos.y,
+      moved: false,
+    };
+  };
+
+  const handlePillPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const st = dragStateRef.current;
+    if (!st) return;
+    const dx = e.clientX - st.startX;
+    const dy = e.clientY - st.startY;
+    if (Math.hypot(dx, dy) > 4) st.moved = true;
+    if (!st.moved) return;
+
+    const parent = e.currentTarget.parentElement;
+    const maxW = parent ? Math.max(120, parent.clientWidth - 150) : 800;
+    const maxH = parent ? Math.max(120, parent.clientHeight - 70) : 500;
+    setToolPos({
+      x: Math.max(8, Math.min(maxW, st.origX + dx)),
+      y: Math.max(8, Math.min(maxH, st.origY + dy)),
+    });
+  };
+
+  const handlePillPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const st = dragStateRef.current;
+    dragStateRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    if (st && !st.moved) {
+      setToolExpanded((exp) => !exp);
+    }
+  };
+
   const kpiCards =
-    mode === 'cad'
+    mode === 'cad' || mode === 'mesh'
       ? [
-          { label: 'CAD Parts', value: String(cadCount), unit: 'solids' },
+          {
+            label: mode === 'mesh' ? 'Sculpt Mode' : 'CAD Solids',
+            value: mode === 'mesh' ? activeBrush.label : String(cadCount),
+            unit: mode === 'mesh' ? '' : 'parts',
+          },
+          { label: 'Vertices', value: meshStats.vertices.toLocaleString(), unit: '' },
+          { label: 'Triangles', value: meshStats.triangles.toLocaleString(), unit: '' },
+          { label: 'Frame Rate', value: String(fps), unit: 'fps' },
+        ]
+      : mode === 'electronics'
+      ? [
+          { label: 'Solver', value: 'MNA DC', unit: '' },
           { label: 'Vertices', value: meshStats.vertices.toLocaleString(), unit: '' },
           { label: 'Triangles', value: meshStats.triangles.toLocaleString(), unit: '' },
           { label: 'Frame Rate', value: String(fps), unit: 'fps' },
@@ -109,53 +202,71 @@ export const ViewportHUD: React.FC<ViewportHUDProps> = ({
         ))}
       </div>
 
-      <div className="hud-top-right">
-        {showGizmos && (
-          <>
-            <button
-              type="button"
-              className={`hud-btn ${gizmoMode === 'select' ? 'active' : ''}`}
-              onClick={() => onGizmoChange('select')}
-              title="Select (Q)"
-            >
-              <MousePointer size={12} />
-            </button>
-            <button
-              type="button"
-              className={`hud-btn ${gizmoMode === 'translate' ? 'active' : ''}`}
-              onClick={() => onGizmoChange('translate')}
-              title="Move (W)"
-            >
-              <Move size={12} />
-            </button>
-            <button
-              type="button"
-              className={`hud-btn ${gizmoMode === 'rotate' ? 'active' : ''}`}
-              onClick={() => onGizmoChange('rotate')}
-              title="Rotate (E)"
-            >
-              <RotateCw size={12} />
-            </button>
-            <button
-              type="button"
-              className={`hud-btn ${gizmoMode === 'scale' ? 'active' : ''}`}
-              onClick={() => onGizmoChange('scale')}
-              title="Scale (R)"
-            >
-              <Scale size={12} />
-            </button>
-            <span className="hud-divider" />
-          </>
-        )}
+      {/* Draggable & Shrinkable Active Tool Pill */}
+      {showToolPill && (
+        <div
+          className={`tool-dock-pill ${toolExpanded ? 'expanded' : ''}`}
+          style={{ left: toolPos.x, top: toolPos.y }}
+          onPointerDown={handlePillPointerDown}
+          onPointerMove={handlePillPointerMove}
+          onPointerUp={handlePillPointerUp}
+          title="Drag to move anywhere · Click to expand tools"
+        >
+          <div className="tool-dock-active">
+            <GripVertical size={12} color="#71717a" />
+            {showBrush ? <Sparkles size={13} color="#2680eb" /> : activeGizmo.icon}
+            <span>{showBrush ? activeBrush.label : activeGizmo.label}</span>
+            <ChevronDown size={11} color="#71717a" />
+          </div>
 
-        {(['persp', 'top', 'front', 'iso'] as CameraPreset[]).map((p) => (
+          {toolExpanded && (
+            <div className="tool-dock-drawer">
+              {showGizmos &&
+                GIZMO_TOOLS.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    data-tool-option="1"
+                    className={`hud-btn ${gizmoMode === t.id ? 'active' : ''}`}
+                    onClick={() => {
+                      onGizmoChange(t.id);
+                      setToolExpanded(false);
+                    }}
+                  >
+                    {t.icon}
+                    <span>{t.label}</span>
+                  </button>
+                ))}
+              {showBrush &&
+                SCULPT_TOOLS.map((b) => (
+                  <button
+                    key={b.id}
+                    type="button"
+                    data-tool-option="1"
+                    className={`hud-btn ${sculptBrush === b.id ? 'active' : ''}`}
+                    onClick={() => {
+                      onSculptBrushChange(b.id);
+                      setToolExpanded(false);
+                    }}
+                  >
+                    <span>{b.label}</span>
+                  </button>
+                ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Ghost-Transparent Hover-Reveal Camera View Bar */}
+      <div className="ghost-camera-bar" role="group" aria-label="Camera Views">
+        {(['persp', 'top', 'front', 'right', 'iso'] as CameraPreset[]).map((p) => (
           <button
             key={p}
             type="button"
             className="hud-btn"
             onClick={() => onCameraPreset(p)}
           >
-            {p.toUpperCase()}
+            {p === 'right' ? 'SIDE' : p.toUpperCase()}
           </button>
         ))}
         <button
@@ -197,7 +308,7 @@ export const ViewportHUD: React.FC<ViewportHUDProps> = ({
           title="Telemetry Plots & Sweep Results"
         >
           <Activity size={13} />
-          <span>Plots</span>
+          <span className="hide-sm">Plots</span>
         </button>
         <button
           type="button"
@@ -229,6 +340,10 @@ export const ViewportHUD: React.FC<ViewportHUDProps> = ({
           <div className="details-row">
             <span className="details-key">Select / Move / Rotate / Scale</span>
             <span className="details-val">Q / W / E / R</span>
+          </div>
+          <div className="details-row">
+            <span className="details-key">Sculpt Mesh</span>
+            <span className="details-val">Left-Drag on Mesh</span>
           </div>
           <div className="details-row">
             <span className="details-key">Orbit / Pan / Zoom</span>

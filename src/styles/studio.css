@@ -67,6 +67,8 @@ body,
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  flex: 1;
 }
 
 .brand-chip {
@@ -109,6 +111,13 @@ body,
   border-radius: 7px;
   padding: 2px;
   gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  max-width: 100%;
+}
+
+.mode-pills::-webkit-scrollbar {
+  display: none;
 }
 
 .mode-pill {
@@ -1286,4 +1295,276 @@ body,
   position: relative;
   background: #000000;
   overflow: hidden;
+}
+
+/* Draggable & Shrinkable Viewport Tool Pill */
+.tool-dock-pill {
+  position: absolute;
+  z-index: 25;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+  background: var(--glass-bg);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.15s ease;
+}
+
+.tool-dock-pill:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.tool-dock-pill:active {
+  cursor: grabbing;
+}
+
+.tool-dock-active {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.tool-dock-drawer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px;
+  border-top: 1px solid var(--glass-border);
+  max-width: 240px;
+}
+
+/* Ghost-Transparent Hover-Reveal Camera View Bar */
+.ghost-camera-bar {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border-radius: 9px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+  opacity: 0.16;
+  transition: opacity 0.2s ease, border-color 0.2s ease;
+}
+
+.ghost-camera-bar:hover,
+.ghost-camera-bar:focus-within {
+  opacity: 1;
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+@media (hover: none) {
+  .ghost-camera-bar {
+    opacity: 0.52;
+  }
+}
+
+/* Parts Library Category Pills & 2D Blueprint Container */
+.cat-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.cat-pill {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.cat-pill:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.cat-pill.active {
+  background: var(--accent-soft);
+  color: #93c5fd;
+  border-color: var(--accent);
+}
+
+.blueprint-box {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+  background: #071324;
+  padding: 4px;
+}
+
+/* Proteus-Style 2D Schematic Floating Panel */
+.schematic-overlay-panel {
+  position: absolute;
+  right: 14px;
+  bottom: 56px;
+  width: min(520px, calc(100% - 28px));
+  max-height: 55%;
+  background: rgba(11, 11, 15, 0.94);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  z-index: 22;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.65);
+}
+
+.schematic-header {
+  height: 32px;
+  min-height: 32px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.schematic-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Screen Responsiveness */
+@media (max-width: 1200px) {
+  .hide-md {
+    display: none !important;
+  }
+
+  .side-panel {
+    width: 244px;
+    min-width: 244px;
+  }
+
+  .side-panel.right {
+    width: 272px;
+    min-width: 272px;
+  }
+}
+
+@media (max-width: 900px) {
+  .side-panel {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 28;
+    box-shadow: 8px 0 28px rgba(0, 0, 0, 0.65);
+  }
+
+  .side-panel.right {
+    left: auto;
+    right: 0;
+    box-shadow: -8px 0 28px rgba(0, 0, 0, 0.65);
+  }
+
+  .logo-studio-body {
+    flex-direction: column;
+  }
+
+  .logo-studio-stage {
+    min-height: 44vh;
+  }
+
+  .logo-studio-body .side-panel {
+    position: static;
+    width: 100%;
+    min-width: 0;
+    max-height: 56vh;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .kpi-strip {
+    flex-wrap: wrap;
+    max-width: calc(100% - 28px);
+  }
+
+  .kpi-card {
+    min-width: 82px;
+    padding: 6px 9px;
+  }
+
+  .kpi-value {
+    font-size: 14px;
+  }
+}
+
+@media (max-width: 640px) {
+  .hide-sm {
+    display: none !important;
+  }
+
+  .topbar {
+    padding: 0 6px;
+    gap: 6px;
+  }
+
+  .mode-pill {
+    padding: 0 7px;
+    font-size: 11px;
+  }
+
+  .floating-playback-bar {
+    left: 8px;
+    bottom: 8px;
+    padding: 4px 6px;
+    gap: 4px;
+    flex-wrap: wrap;
+    max-width: calc(100vw - 96px);
+  }
+
+  .hud-bottom-right {
+    right: 8px;
+    bottom: 8px;
+  }
+
+  .ghost-camera-bar {
+    top: 8px;
+    right: 8px;
+    padding: 2px;
+  }
+
+  .ghost-camera-bar .hud-btn {
+    padding: 0 5px;
+    font-size: 9.5px;
+  }
+
+  .kpi-strip {
+    top: 8px;
+    left: 8px;
+    gap: 5px;
+  }
+
+  .kpi-card:nth-child(n + 3) {
+    display: none;
+  }
+
+  .schematic-overlay-panel {
+    left: 8px;
+    right: 8px;
+    width: auto;
+    bottom: 54px;
+  }
 }

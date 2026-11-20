@@ -2,20 +2,30 @@ import React, { useState } from 'react';
 import {
   ArrowRightCircle,
   ChevronsRight,
+  Code2,
+  Cpu,
+  Download,
   Droplets,
   Info,
+  Layers,
   Link2,
   Play,
+  Undo2,
   Zap,
 } from 'lucide-react';
 import type {
   BodyType,
   CadPartConfig,
+  CircuitComponent,
+  CircuitSchematic,
+  CircuitSolveResult,
   ClothPinMode,
   ColormapName,
   CsgOperation,
   JointKind,
   MathConfig,
+  MeshSculptConfig,
+  SnapMode,
   SoftSimConfig,
   StudioEntity,
   StudioJoint,
@@ -26,6 +36,11 @@ import type {
 } from '../types/studio';
 import { SCRIPT_TEMPLATES } from '../engines/experiments/scriptRunner';
 import { SWEEP_TEMPLATES } from '../engines/experiments/sweepRunner';
+import { DESIGN_CODE_TEMPLATES } from '../engines/cad/designCompiler';
+import {
+  SKETCH_2D_PRESETS,
+  type BlueprintProjection,
+} from '../engines/cad/sketch2D';
 import {
   AccordionSection,
   SegmentedControl,
@@ -48,12 +63,42 @@ interface RightPanelProps {
   onUpdateJointMotor: (id: string, motorSpeed: number, motorMaxForce: number) => void;
   onAddJoint: (joint: StudioJoint) => void;
   onDeleteJoint: (id: string) => void;
-  // CAD
+  // CAD, Parts, 2D<->3D & Code CAD
   cadParts: CadPartConfig[];
   selectedCadPart: CadPartConfig | null;
   onUpdateCadPart: (id: string, patch: Partial<CadPartConfig>) => void;
+  onSnapCadPart: (partId: string, targetId: string | null, snapMode: SnapMode) => void;
   onRunCsg: (idA: string, idB: string, op: CsgOperation) => void;
   onSendCadToPhysics: (id: string) => void;
+  onBuildFrom2DSketch: (
+    points: [number, number][],
+    sketchMode: 'extrude' | 'lathe',
+    depth: number,
+    name: string
+  ) => void;
+  blueprintProjection: BlueprintProjection | null;
+  onProjectSelected3DTo2D: () => void;
+  onDownloadBlueprintSVG: () => void;
+  designCode: string;
+  onDesignCodeChange: (code: string) => void;
+  onRunDesignCode: () => void;
+  designCodeError: string | null;
+  // Mesh Sculpt
+  meshConfig: MeshSculptConfig;
+  onUpdateMeshConfig: (next: MeshSculptConfig) => void;
+  onSubdivideMesh: () => void;
+  onUndoMesh: () => void;
+  onSendMeshToPhysics: () => void;
+  onSendMeshToCad: () => void;
+  // Electronics
+  circuit: CircuitSchematic;
+  circuitSolved: CircuitSolveResult;
+  selectedCircuitCompId: string | null;
+  onSelectCircuitComp: (id: string) => void;
+  onUpdateCircuitComp: (id: string, patch: Partial<CircuitComponent>) => void;
+  onDeleteCircuitComp: (id: string) => void;
+  schematicOpen: boolean;
+  onToggleSchematic: () => void;
   // Math
   mathConfig: MathConfig;
   mathErrors: string[];
@@ -108,6 +153,21 @@ const Vec3Editor: React.FC<{
   );
 };
 
+function pointsToText(pts: [number, number][]): string {
+  return pts.map(([x, y]) => `${x}, ${y}`).join('\n');
+}
+
+function parsePointsText(text: string): [number, number][] {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [xs, ys] = line.split(/[,\s]+/);
+      return [Number(xs) || 0, Number(ys) || 0] as [number, number];
+    });
+}
+
 export const RightPanel: React.FC<RightPanelProps> = ({
   mode,
   onCollapse,
@@ -125,8 +185,31 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   cadParts,
   selectedCadPart,
   onUpdateCadPart,
+  onSnapCadPart,
   onRunCsg,
   onSendCadToPhysics,
+  onBuildFrom2DSketch,
+  blueprintProjection,
+  onProjectSelected3DTo2D,
+  onDownloadBlueprintSVG,
+  designCode,
+  onDesignCodeChange,
+  onRunDesignCode,
+  designCodeError,
+  meshConfig,
+  onUpdateMeshConfig,
+  onSubdivideMesh,
+  onUndoMesh,
+  onSendMeshToPhysics,
+  onSendMeshToCad,
+  circuit,
+  circuitSolved,
+  selectedCircuitCompId,
+  onSelectCircuitComp,
+  onUpdateCircuitComp,
+  onDeleteCircuitComp,
+  schematicOpen,
+  onToggleSchematic,
   mathConfig,
   mathErrors,
   mathStats,
@@ -148,6 +231,15 @@ export const RightPanel: React.FC<RightPanelProps> = ({
 }) => {
   const [csgA, setCsgA] = useState<string>(cadParts[0]?.id ?? '');
   const [csgB, setCsgB] = useState<string>(cadParts[1]?.id ?? '');
+  const [snapTargetId, setSnapTargetId] = useState<string>(cadParts[0]?.id ?? '');
+  const [cadSubTab, setCadSubTab] = useState<'assemble' | 'sketch2d' | 'code' | 'csg'>('assemble');
+
+  // 2D <-> 3D Sketch Local Editor State
+  const [sketchPresetId, setSketchPresetId] = useState(SKETCH_2D_PRESETS[0].id);
+  const [sketchMode, setSketchMode] = useState<'extrude' | 'lathe'>(SKETCH_2D_PRESETS[0].mode);
+  const [sketchDepth, setSketchDepth] = useState(SKETCH_2D_PRESETS[0].depth);
+  const [sketchText, setSketchText] = useState(() => pointsToText(SKETCH_2D_PRESETS[0].points));
+
   const [newJointKind, setNewJointKind] = useState<JointKind>('spring');
   const [newJointA, setNewJointA] = useState<string>(entities[0]?.id ?? '');
   const [newJointB, setNewJointB] = useState<string>(entities[1]?.id ?? '');
@@ -157,12 +249,23 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   const resolvedCsgB = cadParts.some((p) => p.id === csgB)
     ? csgB
     : cadParts[1]?.id ?? cadParts[0]?.id ?? '';
+  const resolvedSnapTarget = cadParts.some(
+    (p) => p.id === snapTargetId && p.id !== selectedCadPart?.id
+  )
+    ? snapTargetId
+    : cadParts.find((p) => p.id !== selectedCadPart?.id)?.id ?? '';
+
   const resolvedJointA = entities.some((e) => e.id === newJointA)
     ? newJointA
     : entities[0]?.id ?? '';
   const resolvedJointB = entities.some((e) => e.id === newJointB)
     ? newJointB
     : entities[1]?.id ?? entities[0]?.id ?? '';
+
+  const selectedComp =
+    circuit.components.find((c) => c.id === selectedCircuitCompId) ??
+    circuit.components[0] ??
+    null;
 
   return (
     <aside className="side-panel right">
@@ -428,222 +531,717 @@ export const RightPanel: React.FC<RightPanelProps> = ({
 
         {mode === 'cad' && (
           <>
-            <AccordionSection title="Parametric CAD" defaultOpen>
-              {selectedCadPart ? (
-                <>
-                  <div className="field-row">
-                    <span className="field-label">Name</span>
-                    <input
-                      className="input-text"
-                      style={{ width: '64%' }}
-                      value={selectedCadPart.name}
-                      onChange={(e) =>
-                        onUpdateCadPart(selectedCadPart.id, { name: e.target.value })
-                      }
-                    />
-                  </div>
-                  <Vec3Editor
-                    label="Position (m)"
-                    value={selectedCadPart.position}
-                    onChange={(position) => onUpdateCadPart(selectedCadPart.id, { position })}
-                  />
-                  <Vec3Editor
-                    label="Rotation (rad)"
-                    value={selectedCadPart.rotation}
-                    onChange={(rotation) => onUpdateCadPart(selectedCadPart.id, { rotation })}
-                  />
+            <div style={{ padding: '8px 12px 4px 12px' }}>
+              <SegmentedControl
+                value={cadSubTab}
+                columns={2}
+                options={[
+                  { value: 'assemble', label: 'Assemble & Fix' },
+                  { value: 'sketch2d', label: '2D ↔ 3D' },
+                  { value: 'code', label: 'Code CAD' },
+                  { value: 'csg', label: 'CSG Booleans' },
+                ]}
+                onChange={setCadSubTab}
+              />
+            </div>
 
-                  {!selectedCadPart.csgMesh && (
+            {cadSubTab === 'assemble' && (
+              <>
+                <AccordionSection title="Part Inspector & Fix" defaultOpen>
+                  {selectedCadPart ? (
                     <>
-                      {(selectedCadPart.kind === 'box' || selectedCadPart.kind === 'bracket') && (
+                      <div className="field-row">
+                        <span className="field-label">Name</span>
+                        <input
+                          className="input-text"
+                          style={{ width: '64%' }}
+                          value={selectedCadPart.name}
+                          onChange={(e) =>
+                            onUpdateCadPart(selectedCadPart.id, { name: e.target.value })
+                          }
+                        />
+                      </div>
+
+                      <ToggleSwitch
+                        label="Fix / Lock in Place"
+                        checked={Boolean(selectedCadPart.locked)}
+                        onChange={(locked) => onUpdateCadPart(selectedCadPart.id, { locked })}
+                      />
+
+                      <Vec3Editor
+                        label="Position (m)"
+                        value={selectedCadPart.position}
+                        onChange={(position) => onUpdateCadPart(selectedCadPart.id, { position })}
+                      />
+                      <Vec3Editor
+                        label="Rotation (rad)"
+                        value={selectedCadPart.rotation}
+                        onChange={(rotation) => onUpdateCadPart(selectedCadPart.id, { rotation })}
+                      />
+
+                      {!selectedCadPart.csgMesh && (
                         <>
+                          {(selectedCadPart.kind === 'box' ||
+                            selectedCadPart.kind === 'bracket') && (
+                            <>
+                              <StudioSlider
+                                label="Width"
+                                value={selectedCadPart.width}
+                                min={0.3}
+                                max={4}
+                                step={0.05}
+                                onChange={(width) =>
+                                  onUpdateCadPart(selectedCadPart.id, { width })
+                                }
+                              />
+                              <StudioSlider
+                                label="Thickness"
+                                value={selectedCadPart.depth}
+                                min={0.15}
+                                max={4}
+                                step={0.05}
+                                onChange={(depth) =>
+                                  onUpdateCadPart(selectedCadPart.id, { depth })
+                                }
+                              />
+                            </>
+                          )}
                           <StudioSlider
-                            label="Width"
-                            value={selectedCadPart.width}
-                            min={0.3}
-                            max={4}
-                            step={0.05}
-                            onChange={(width) => onUpdateCadPart(selectedCadPart.id, { width })}
-                          />
-                          <StudioSlider
-                            label="Thickness"
-                            value={selectedCadPart.depth}
+                            label="Height"
+                            value={selectedCadPart.height}
                             min={0.15}
                             max={4}
                             step={0.05}
-                            onChange={(depth) => onUpdateCadPart(selectedCadPart.id, { depth })}
+                            onChange={(height) => onUpdateCadPart(selectedCadPart.id, { height })}
                           />
+                          {selectedCadPart.kind !== 'box' && (
+                            <StudioSlider
+                              label="Outer R"
+                              value={selectedCadPart.outerRadius}
+                              min={0.25}
+                              max={3}
+                              step={0.05}
+                              onChange={(outerRadius) =>
+                                onUpdateCadPart(selectedCadPart.id, { outerRadius })
+                              }
+                            />
+                          )}
+                          {selectedCadPart.kind === 'gear' && (
+                            <StudioSlider
+                              label="Teeth"
+                              value={selectedCadPart.teeth}
+                              min={6}
+                              max={36}
+                              step={1}
+                              decimals={0}
+                              onChange={(teeth) => onUpdateCadPart(selectedCadPart.id, { teeth })}
+                            />
+                          )}
                         </>
                       )}
 
-                      <StudioSlider
-                        label="Height"
-                        value={selectedCadPart.height}
-                        min={0.15}
-                        max={4}
-                        step={0.05}
-                        onChange={(height) => onUpdateCadPart(selectedCadPart.id, { height })}
-                      />
-
-                      {selectedCadPart.kind !== 'box' && (
-                        <StudioSlider
-                          label="Outer R"
-                          value={selectedCadPart.outerRadius}
-                          min={0.25}
-                          max={3}
-                          step={0.05}
-                          onChange={(outerRadius) =>
-                            onUpdateCadPart(selectedCadPart.id, { outerRadius })
+                      <div className="field-row">
+                        <span className="field-label">Color</span>
+                        <input
+                          type="color"
+                          value={selectedCadPart.color}
+                          onChange={(e) =>
+                            onUpdateCadPart(selectedCadPart.id, { color: e.target.value })
                           }
                         />
-                      )}
+                      </div>
 
-                      {selectedCadPart.kind === 'pipe' && (
-                        <StudioSlider
-                          label="Inner R"
-                          value={selectedCadPart.innerRadius}
-                          min={0.1}
-                          max={2.4}
-                          step={0.05}
-                          onChange={(innerRadius) =>
-                            onUpdateCadPart(selectedCadPart.id, { innerRadius })
-                          }
-                        />
-                      )}
+                      <button
+                        type="button"
+                        className="action-btn primary"
+                        onClick={() => onSendCadToPhysics(selectedCadPart.id)}
+                      >
+                        <ArrowRightCircle size={13} />
+                        <span>Send Part to Physics</span>
+                      </button>
+                    </>
+                  ) : (
+                    <span className="field-label">Select a CAD part to inspect or fix.</span>
+                  )}
+                </AccordionSection>
 
-                      {selectedCadPart.kind === 'gear' && (
-                        <StudioSlider
-                          label="Teeth"
-                          value={selectedCadPart.teeth}
-                          min={6}
-                          max={36}
-                          step={1}
-                          decimals={0}
-                          onChange={(teeth) => onUpdateCadPart(selectedCadPart.id, { teeth })}
-                        />
-                      )}
+                {selectedCadPart && (
+                  <AccordionSection title="Snap / Mount Part" defaultOpen>
+                    <button
+                      type="button"
+                      className="action-btn"
+                      onClick={() => onSnapCadPart(selectedCadPart.id, null, 'ground')}
+                    >
+                      Snap Flush to Ground (Y=0)
+                    </button>
 
-                      {selectedCadPart.kind === 'polygon' && (
-                        <StudioSlider
-                          label="Sides"
-                          value={selectedCadPart.sides}
-                          min={3}
-                          max={12}
-                          step={1}
-                          decimals={0}
-                          onChange={(sides) => onUpdateCadPart(selectedCadPart.id, { sides })}
-                        />
-                      )}
-
-                      {selectedCadPart.kind === 'lathe' && (
-                        <div className="field-row">
-                          <span className="field-label">Profile</span>
+                    {cadParts.length >= 2 && (
+                      <>
+                        <div className="field-col">
+                          <span className="field-label">Mount Onto Target</span>
                           <select
                             className="input-select"
-                            style={{ width: '60%' }}
-                            value={selectedCadPart.latheCurve}
-                            onChange={(e) =>
-                              onUpdateCadPart(selectedCadPart.id, {
-                                latheCurve: e.target.value as CadPartConfig['latheCurve'],
-                              })
-                            }
+                            value={resolvedSnapTarget}
+                            onChange={(e) => setSnapTargetId(e.target.value)}
                           >
-                            <option value="nozzle">De Laval Nozzle</option>
-                            <option value="bell">Aerospace Bell</option>
-                            <option value="hourglass">Venturi Hourglass</option>
-                            <option value="coneCup">Conical Funnel</option>
+                            {cadParts
+                              .filter((p) => p.id !== selectedCadPart.id)
+                              .map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name}
+                                </option>
+                              ))}
                           </select>
                         </div>
-                      )}
-                    </>
+                        <div className="compact-grid">
+                          <button
+                            type="button"
+                            className="action-btn"
+                            onClick={() =>
+                              resolvedSnapTarget &&
+                              onSnapCadPart(selectedCadPart.id, resolvedSnapTarget, 'onTop')
+                            }
+                          >
+                            Fix On Top
+                          </button>
+                          <button
+                            type="button"
+                            className="action-btn"
+                            onClick={() =>
+                              resolvedSnapTarget &&
+                              onSnapCadPart(selectedCadPart.id, resolvedSnapTarget, 'inFront')
+                            }
+                          >
+                            Fix In Front
+                          </button>
+                          <button
+                            type="button"
+                            className="action-btn"
+                            onClick={() =>
+                              resolvedSnapTarget &&
+                              onSnapCadPart(selectedCadPart.id, resolvedSnapTarget, 'toRight')
+                            }
+                          >
+                            Fix Right
+                          </button>
+                          <button
+                            type="button"
+                            className="action-btn"
+                            onClick={() =>
+                              resolvedSnapTarget &&
+                              onSnapCadPart(selectedCadPart.id, resolvedSnapTarget, 'centerAlign')
+                            }
+                          >
+                            Center Align
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </AccordionSection>
+                )}
+              </>
+            )}
+
+            {cadSubTab === 'sketch2d' && (
+              <>
+                <AccordionSection title="2D Sketch → 3D Solid" defaultOpen>
+                  <div className="field-col">
+                    <span className="field-label">2D Profile Preset</span>
+                    <select
+                      className="input-select"
+                      value={sketchPresetId}
+                      onChange={(e) => {
+                        const pr = SKETCH_2D_PRESETS.find((x) => x.id === e.target.value);
+                        if (!pr) return;
+                        setSketchPresetId(pr.id);
+                        setSketchMode(pr.mode);
+                        setSketchDepth(pr.depth);
+                        setSketchText(pointsToText(pr.points));
+                      }}
+                    >
+                      {SKETCH_2D_PRESETS.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <SegmentedControl
+                    value={sketchMode}
+                    columns={2}
+                    options={[
+                      { value: 'extrude', label: 'Extrude 2D' },
+                      { value: 'lathe', label: 'Revolve (Lathe)' },
+                    ]}
+                    onChange={setSketchMode}
+                  />
+
+                  {sketchMode === 'extrude' && (
+                    <StudioSlider
+                      label="Depth (m)"
+                      value={sketchDepth}
+                      min={0.1}
+                      max={4.0}
+                      step={0.05}
+                      onChange={setSketchDepth}
+                    />
                   )}
 
-                  <div className="field-row">
-                    <span className="field-label">Color</span>
-                    <input
-                      type="color"
-                      value={selectedCadPart.color}
-                      onChange={(e) =>
-                        onUpdateCadPart(selectedCadPart.id, { color: e.target.value })
-                      }
+                  <div className="field-col">
+                    <span className="field-label">2D Coordinates (x, y per line)</span>
+                    <textarea
+                      className="input-code"
+                      style={{ minHeight: 110 }}
+                      spellCheck={false}
+                      value={sketchText}
+                      onChange={(e) => setSketchText(e.target.value)}
                     />
                   </div>
 
                   <button
                     type="button"
                     className="action-btn primary"
-                    onClick={() => onSendCadToPhysics(selectedCadPart.id)}
+                    onClick={() => {
+                      const pts = parsePointsText(sketchText);
+                      const pr = SKETCH_2D_PRESETS.find((x) => x.id === sketchPresetId);
+                      onBuildFrom2DSketch(
+                        pts,
+                        sketchMode,
+                        sketchDepth,
+                        `${pr?.name ?? '2D Sketch'} 3D`
+                      );
+                    }}
                   >
-                    <ArrowRightCircle size={13} />
-                    <span>Send Part to Physics</span>
+                    <Layers size={13} />
+                    <span>Generate 3D from 2D Sketch</span>
                   </button>
+                </AccordionSection>
+
+                <AccordionSection title="3D Part → 2D Blueprint" defaultOpen>
+                  <button
+                    type="button"
+                    className="action-btn"
+                    onClick={onProjectSelected3DTo2D}
+                  >
+                    Project Selected 3D → 2D Views
+                  </button>
+
+                  {blueprintProjection && (
+                    <>
+                      <div className="blueprint-box">
+                        <svg viewBox="0 0 300 130" style={{ width: '100%', display: 'block' }}>
+                          <rect width="300" height="130" fill="#071324" rx="5" />
+                          {(
+                            [
+                              ['TOP', blueprintProjection.top, 52],
+                              ['FRONT', blueprintProjection.front, 150],
+                              ['SIDE', blueprintProjection.side, 248],
+                            ] as const
+                          ).map(([lbl, segs, cx]) => {
+                            const maxD = Math.max(
+                              0.4,
+                              blueprintProjection.width,
+                              blueprintProjection.height,
+                              blueprintProjection.depth
+                            );
+                            const sc = 64 / maxD;
+                            return (
+                              <g key={lbl}>
+                                <g stroke="#38bdf8" strokeWidth="0.9">
+                                  {segs.slice(0, 220).map(([x1, y1, x2, y2], idx) => (
+                                    <line
+                                      key={idx}
+                                      x1={cx + x1 * sc}
+                                      y1={60 + y1 * sc}
+                                      x2={cx + x2 * sc}
+                                      y2={60 + y2 * sc}
+                                    />
+                                  ))}
+                                </g>
+                                <text
+                                  x={cx}
+                                  y={118}
+                                  textAnchor="middle"
+                                  fill="#94a3b8"
+                                  fontSize="8.5"
+                                  fontFamily="monospace"
+                                >
+                                  {lbl}
+                                </text>
+                              </g>
+                            );
+                          })}
+                        </svg>
+                      </div>
+                      <div className="details-row" style={{ fontSize: 10.5 }}>
+                        <span className="details-key">Dimensions</span>
+                        <span className="details-val">
+                          {blueprintProjection.width} × {blueprintProjection.height} ×{' '}
+                          {blueprintProjection.depth} m
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="action-btn primary"
+                        onClick={onDownloadBlueprintSVG}
+                      >
+                        <Download size={12} />
+                        <span>Download 2D Blueprint (.svg)</span>
+                      </button>
+                    </>
+                  )}
+                </AccordionSection>
+              </>
+            )}
+
+            {cadSubTab === 'code' && (
+              <AccordionSection title="Programmable 3D Design DSL" defaultOpen>
+                <div className="field-col">
+                  <span className="field-label">Design Template</span>
+                  <select
+                    className="input-select"
+                    onChange={(e) => {
+                      const t = DESIGN_CODE_TEMPLATES.find((d) => d.id === e.target.value);
+                      if (t) onDesignCodeChange(t.code);
+                    }}
+                    defaultValue={DESIGN_CODE_TEMPLATES[0].id}
+                  >
+                    {DESIGN_CODE_TEMPLATES.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <textarea
+                  className="input-code"
+                  style={{ minHeight: 195 }}
+                  spellCheck={false}
+                  value={designCode}
+                  onChange={(e) => onDesignCodeChange(e.target.value)}
+                />
+
+                <button type="button" className="action-btn primary" onClick={onRunDesignCode}>
+                  <Code2 size={13} />
+                  <span>Compile &amp; Build 3D</span>
+                </button>
+
+                {designCodeError && <div className="error-banner">{designCodeError}</div>}
+              </AccordionSection>
+            )}
+
+            {cadSubTab === 'csg' && (
+              <AccordionSection title="CSG Boolean Operations" defaultOpen>
+                <div className="field-col">
+                  <span className="field-label">Target A</span>
+                  <select
+                    className="input-select"
+                    value={resolvedCsgA}
+                    onChange={(e) => setCsgA(e.target.value)}
+                  >
+                    {cadParts.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field-col">
+                  <span className="field-label">Tool B</span>
+                  <select
+                    className="input-select"
+                    value={resolvedCsgB}
+                    onChange={(e) => setCsgB(e.target.value)}
+                  >
+                    {cadParts.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{ display: 'flex', gap: 5 }}>
+                  <button
+                    type="button"
+                    className="action-btn"
+                    style={{ flex: 1 }}
+                    onClick={() =>
+                      resolvedCsgA && resolvedCsgB && onRunCsg(resolvedCsgA, resolvedCsgB, 'union')
+                    }
+                  >
+                    Union
+                  </button>
+                  <button
+                    type="button"
+                    className="action-btn"
+                    style={{ flex: 1 }}
+                    onClick={() =>
+                      resolvedCsgA &&
+                      resolvedCsgB &&
+                      onRunCsg(resolvedCsgA, resolvedCsgB, 'subtract')
+                    }
+                  >
+                    Subtract
+                  </button>
+                  <button
+                    type="button"
+                    className="action-btn"
+                    style={{ flex: 1 }}
+                    onClick={() =>
+                      resolvedCsgA &&
+                      resolvedCsgB &&
+                      onRunCsg(resolvedCsgA, resolvedCsgB, 'intersect')
+                    }
+                  >
+                    Intersect
+                  </button>
+                </div>
+              </AccordionSection>
+            )}
+          </>
+        )}
+
+        {mode === 'mesh' && (
+          <>
+            <AccordionSection title="Brush & Sculpt Controls" defaultOpen>
+              <StudioSlider
+                label="Radius"
+                value={meshConfig.radius}
+                min={0.12}
+                max={1.4}
+                step={0.02}
+                onChange={(radius) => onUpdateMeshConfig({ ...meshConfig, radius })}
+              />
+              <StudioSlider
+                label="Strength"
+                value={meshConfig.strength}
+                min={0.05}
+                max={1.0}
+                step={0.05}
+                onChange={(strength) => onUpdateMeshConfig({ ...meshConfig, strength })}
+              />
+              <ToggleSwitch
+                label="X-Mirror Symmetry"
+                checked={meshConfig.symmetryX}
+                onChange={(symmetryX) => onUpdateMeshConfig({ ...meshConfig, symmetryX })}
+              />
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  type="button"
+                  className="action-btn"
+                  style={{ flex: 1 }}
+                  onClick={onUndoMesh}
+                >
+                  <Undo2 size={12} />
+                  <span>Undo Stroke</span>
+                </button>
+                <button
+                  type="button"
+                  className="action-btn"
+                  style={{ flex: 1 }}
+                  onClick={onSubdivideMesh}
+                >
+                  <Layers size={12} />
+                  <span>Subdivide 4×</span>
+                </button>
+              </div>
+            </AccordionSection>
+
+            <AccordionSection title="Procedural Modifiers" defaultOpen>
+              <StudioSlider
+                label="Twist"
+                value={meshConfig.twist}
+                min={-2.5}
+                max={2.5}
+                step={0.05}
+                onChange={(twist) => onUpdateMeshConfig({ ...meshConfig, twist })}
+              />
+              <StudioSlider
+                label="Taper"
+                value={meshConfig.taper}
+                min={-1.2}
+                max={1.2}
+                step={0.05}
+                onChange={(taper) => onUpdateMeshConfig({ ...meshConfig, taper })}
+              />
+              <StudioSlider
+                label="Noise"
+                value={meshConfig.noise}
+                min={0}
+                max={1.5}
+                step={0.05}
+                onChange={(noise) => onUpdateMeshConfig({ ...meshConfig, noise })}
+              />
+              <button type="button" className="action-btn primary" onClick={onSendMeshToCad}>
+                <ArrowRightCircle size={13} />
+                <span>Send Mesh to CAD Assembly</span>
+              </button>
+              <button type="button" className="action-btn" onClick={onSendMeshToPhysics}>
+                <ArrowRightCircle size={13} />
+                <span>Drop Mesh into Physics</span>
+              </button>
+            </AccordionSection>
+          </>
+        )}
+
+        {mode === 'electronics' && (
+          <>
+            <AccordionSection title="Proteus Schematic & Inspector" defaultOpen>
+              <button
+                type="button"
+                className={`action-btn ${schematicOpen ? 'primary' : ''}`}
+                onClick={onToggleSchematic}
+              >
+                <Cpu size={13} />
+                <span>{schematicOpen ? 'Hide 2D Schematic' : 'Open 2D Schematic Editor'}</span>
+              </button>
+
+              {circuitSolved.warnings.length > 0 && (
+                <div className="error-banner">{circuitSolved.warnings.join('\n')}</div>
+              )}
+
+              <div className="hierarchy-list" style={{ maxHeight: 135, overflowY: 'auto' }}>
+                {circuit.components.map((c) => {
+                  const ma = (circuitSolved.branchCurrents[c.id] ?? 0) * 1000;
+                  return (
+                    <div
+                      key={c.id}
+                      className={`hierarchy-item ${selectedComp?.id === c.id ? 'selected' : ''}`}
+                      onClick={() => onSelectCircuitComp(c.id)}
+                    >
+                      <div className="hierarchy-label">
+                        <span className="hierarchy-name">{c.name}</span>
+                        <span className="hierarchy-tag">{ma.toFixed(1)}mA</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="mini-icon-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteCircuitComp(c.id);
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {selectedComp && (
+                <>
+                  <div className="field-row">
+                    <span className="field-label">Name</span>
+                    <input
+                      className="input-text"
+                      style={{ width: '62%' }}
+                      value={selectedComp.name}
+                      onChange={(e) =>
+                        onUpdateCircuitComp(selectedComp.id, { name: e.target.value })
+                      }
+                    />
+                  </div>
+                  <div className="field-row">
+                    <span className="field-label">Node A / B</span>
+                    <div style={{ display: 'flex', gap: 4, width: '62%' }}>
+                      <input
+                        className="input-text"
+                        value={selectedComp.nodeA}
+                        onChange={(e) =>
+                          onUpdateCircuitComp(selectedComp.id, { nodeA: e.target.value })
+                        }
+                      />
+                      <input
+                        className="input-text"
+                        value={selectedComp.nodeB}
+                        onChange={(e) =>
+                          onUpdateCircuitComp(selectedComp.id, { nodeB: e.target.value })
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  {selectedComp.kind === 'switch' ? (
+                    <ToggleSwitch
+                      label="Switch Closed"
+                      checked={Boolean(selectedComp.closed)}
+                      onChange={(closed) => onUpdateCircuitComp(selectedComp.id, { closed })}
+                    />
+                  ) : (
+                    <StudioSlider
+                      label={
+                        selectedComp.kind === 'battery' || selectedComp.kind === 'mcu'
+                          ? 'Voltage (V)'
+                          : selectedComp.kind === 'led'
+                          ? 'Drop Vf (V)'
+                          : selectedComp.kind === 'capacitor'
+                          ? 'Cap (µF)'
+                          : 'Ohms (Ω)'
+                      }
+                      value={selectedComp.value}
+                      min={
+                        selectedComp.kind === 'battery' || selectedComp.kind === 'mcu'
+                          ? 0
+                          : selectedComp.kind === 'led'
+                          ? 1.2
+                          : 1
+                      }
+                      max={
+                        selectedComp.kind === 'resistor'
+                          ? 5000
+                          : selectedComp.kind === 'capacitor'
+                          ? 1000
+                          : 24
+                      }
+                      step={selectedComp.kind === 'resistor' ? 10 : 0.1}
+                      decimals={selectedComp.kind === 'resistor' ? 0 : 1}
+                      onChange={(value) => onUpdateCircuitComp(selectedComp.id, { value })}
+                    />
+                  )}
                 </>
-              ) : (
-                <span className="field-label">Select a CAD part to inspect.</span>
               )}
             </AccordionSection>
 
-            <AccordionSection title="CSG Boolean Operations" defaultOpen>
-              <div className="field-col">
-                <span className="field-label">Target A</span>
-                <select
-                  className="input-select"
-                  value={resolvedCsgA}
-                  onChange={(e) => setCsgA(e.target.value)}
-                >
-                  {cadParts.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
+            <AccordionSection title="Live Node Probes & RC Trace" defaultOpen>
+              <div className="details-table">
+                {Object.entries(circuitSolved.nodeVoltages).map(([node, volts]) => (
+                  <div className="details-row" key={node}>
+                    <span className="details-key">Node {node}</span>
+                    <span className="details-val">{volts.toFixed(3)} V</span>
+                  </div>
+                ))}
+                {Object.entries(circuitSolved.motorRpm).map(([mid, rpm]) => (
+                  <div className="details-row" key={mid}>
+                    <span className="details-key">Motor Speed</span>
+                    <span className="details-val">{rpm} RPM</span>
+                  </div>
+                ))}
               </div>
-              <div className="field-col">
-                <span className="field-label">Tool B</span>
-                <select
-                  className="input-select"
-                  value={resolvedCsgB}
-                  onChange={(e) => setCsgB(e.target.value)}
-                >
-                  {cadParts.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div style={{ display: 'flex', gap: 5 }}>
-                <button
-                  type="button"
-                  className="action-btn"
-                  style={{ flex: 1 }}
-                  onClick={() =>
-                    resolvedCsgA && resolvedCsgB && onRunCsg(resolvedCsgA, resolvedCsgB, 'union')
-                  }
-                >
-                  Union
-                </button>
-                <button
-                  type="button"
-                  className="action-btn"
-                  style={{ flex: 1 }}
-                  onClick={() =>
-                    resolvedCsgA && resolvedCsgB && onRunCsg(resolvedCsgA, resolvedCsgB, 'subtract')
-                  }
-                >
-                  Subtract
-                </button>
-                <button
-                  type="button"
-                  className="action-btn"
-                  style={{ flex: 1 }}
-                  onClick={() =>
-                    resolvedCsgA && resolvedCsgB && onRunCsg(resolvedCsgA, resolvedCsgB, 'intersect')
-                  }
-                >
-                  Intersect
-                </button>
-              </div>
+              {circuitSolved.transientTrace.length > 2 && (
+                <div className="blueprint-box" style={{ marginTop: 4 }}>
+                  <svg viewBox="0 0 260 66" style={{ width: '100%', display: 'block' }}>
+                    <rect width="260" height="66" fill="#09090d" rx="4" />
+                    <polyline
+                      fill="none"
+                      stroke="#22d3ee"
+                      strokeWidth="1.8"
+                      points={circuitSolved.transientTrace
+                        .map((pt, idx) => {
+                          const maxV = Math.max(
+                            1,
+                            ...circuitSolved.transientTrace.map((t) => t.voltage)
+                          );
+                          const x = 8 + (idx / (circuitSolved.transientTrace.length - 1)) * 244;
+                          const y = 58 - (pt.voltage / maxV) * 48;
+                          return `${x.toFixed(1)},${y.toFixed(1)}`;
+                        })
+                        .join(' ')}
+                    />
+                  </svg>
+                </div>
+              )}
             </AccordionSection>
           </>
         )}
@@ -1314,7 +1912,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({
           </AccordionSection>
         )}
 
-        {/* Image 1 Style Bottom Details Table */}
+        {/* Details Table */}
         <AccordionSection title="Details" defaultOpen>
           <div className="details-table">
             <div className="details-row">

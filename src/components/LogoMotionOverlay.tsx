@@ -54,15 +54,23 @@ export const LogoMotionOverlay: React.FC<LogoMotionOverlayProps> = ({
   const configRef = useRef(config);
   configRef.current = config;
 
+  const onFinishRef = useRef(onFinish);
+  onFinishRef.current = onFinish;
+
+  const overlayElRef = useRef<HTMLDivElement | null>(null);
+  const typoElRef = useRef<HTMLDivElement | null>(null);
+  const dividerElRef = useRef<HTMLDivElement | null>(null);
+  const progressFillRef = useRef<HTMLDivElement | null>(null);
+
   const [studioPlaying, setStudioPlaying] = useState(true);
   const [studioScrub, setStudioScrub] = useState<number | null>(null);
   const [showTextInStudio, setShowTextInStudio] = useState(true);
-  const [progress, setProgress] = useState(viewMode === 'boot' ? 0 : 0.52);
   const [recordingPct, setRecordingPct] = useState<number | null>(null);
   const [savedNotice, setSavedNotice] = useState(false);
 
   const studioPlayingRef = useRef(studioPlaying);
   const studioScrubRef = useRef(studioScrub);
+  const lastProgressRef = useRef(viewMode === 'boot' ? 0 : 0.52);
   studioPlayingRef.current = studioPlaying;
   studioScrubRef.current = studioScrub;
 
@@ -76,24 +84,46 @@ export const LogoMotionOverlay: React.FC<LogoMotionOverlayProps> = ({
     ro.observe(canvas);
 
     let rafId = 0;
-    const startTime = performance.now();
+    let firstFrameNow: number | null = null;
     let studioClock = 0;
-    let lastNow = startTime;
+    let lastNow: number | null = null;
+
+    // Pre-warm shader compile on initial mount frame before starting intro timer
+    renderer.renderAt(0, viewMode === 'boot' ? 0 : null);
 
     const tick = (now: number) => {
       rafId = requestAnimationFrame(tick);
-      const dt = Math.min(0.05, Math.max(0.001, (now - lastNow) / 1000));
+      if (firstFrameNow === null) {
+        firstFrameNow = now;
+        lastNow = now;
+      }
+      const dt = Math.min(0.05, Math.max(0.001, (now - (lastNow ?? now)) / 1000));
       lastNow = now;
       const cfg = configRef.current;
 
       if (viewMode === 'boot') {
-        const elapsedSec = (now - startTime) / 1000;
+        const elapsedSec = (now - firstFrameNow) / 1000;
         const p = Math.min(1, elapsedSec / Math.max(1.5, cfg.durationSec));
-        setProgress(p);
+        lastProgressRef.current = p;
+
+        // Direct DOM style updates at 60fps — zero React re-renders during playback!
+        const tlNow = computeIntroTimeline(p);
+        if (overlayElRef.current) overlayElRef.current.style.opacity = String(tlNow.exitFade);
+        if (typoElRef.current) {
+          typoElRef.current.style.opacity = String(tlNow.textOpacity);
+          typoElRef.current.style.transform = `translate(-50%, calc(-50% + ${tlNow.textSlideY.toFixed(1)}px))`;
+        }
+        if (dividerElRef.current) {
+          dividerElRef.current.style.width = `${Math.round(tlNow.dividerWidth * 260)}px`;
+        }
+        if (progressFillRef.current) {
+          progressFillRef.current.style.width = `${Math.round(p * 100)}%`;
+        }
+
         renderer.renderAt(elapsedSec, p);
         if (p >= 1) {
           cancelAnimationFrame(rafId);
-          onFinish();
+          onFinishRef.current();
         }
       } else {
         if (studioPlayingRef.current && studioScrubRef.current === null) {
@@ -101,10 +131,17 @@ export const LogoMotionOverlay: React.FC<LogoMotionOverlayProps> = ({
         }
         const scrubVal = studioScrubRef.current;
         if (scrubVal !== null) {
-          setProgress(scrubVal);
+          lastProgressRef.current = scrubVal;
+          const tlScrub = computeIntroTimeline(scrubVal);
+          if (typoElRef.current) {
+            typoElRef.current.style.opacity = String(tlScrub.textOpacity);
+          }
           renderer.renderAt(scrubVal * cfg.durationSec, scrubVal);
         } else {
-          setProgress(0.52);
+          lastProgressRef.current = 0.52;
+          if (typoElRef.current) {
+            typoElRef.current.style.opacity = '1';
+          }
           renderer.renderAt(studioClock, null);
         }
       }
@@ -118,7 +155,7 @@ export const LogoMotionOverlay: React.FC<LogoMotionOverlayProps> = ({
       renderer.dispose();
       rendererRef.current = null;
     };
-  }, [viewMode, onFinish]);
+  }, [viewMode]);
 
   useEffect(() => {
     rendererRef.current?.updateConfig(config);
@@ -127,39 +164,36 @@ export const LogoMotionOverlay: React.FC<LogoMotionOverlayProps> = ({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        onFinish();
+        onFinishRef.current();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onFinish]);
-
-  const tl = computeIntroTimeline(progress);
+  }, []);
 
   if (viewMode === 'boot') {
     return (
       <div
+        ref={overlayElRef}
         className="intro-overlay"
-        style={{ opacity: tl.exitFade }}
-        onClick={onFinish}
+        onClick={() => onFinishRef.current()}
         role="dialog"
         aria-label="Outerflow Studio Intro"
       >
         <canvas ref={canvasRef} className="intro-canvas" />
 
         <div
+          ref={typoElRef}
           className="intro-typography"
-          style={{
-            opacity: tl.textOpacity,
-            transform: `translate(-50%, calc(-50% + ${tl.textSlideY}px))`,
-          }}
+          style={{ opacity: 0 }}
         >
           <div className="intro-lab">{config.labLabel}</div>
           <h1 className="intro-title">{config.title}</h1>
           <div
+            ref={dividerElRef}
             className="intro-divider"
             style={{
-              width: `${Math.round(tl.dividerWidth * 260)}px`,
+              width: '0px',
               background: `linear-gradient(90deg, transparent, ${config.secondaryColor}, transparent)`,
             }}
           />
@@ -169,9 +203,10 @@ export const LogoMotionOverlay: React.FC<LogoMotionOverlayProps> = ({
         <div className="intro-footer">
           <div className="intro-progress-track">
             <div
+              ref={progressFillRef}
               className="intro-progress-fill"
               style={{
-                width: `${Math.round(progress * 100)}%`,
+                width: '0%',
                 background: config.secondaryColor,
               }}
             />
@@ -187,7 +222,7 @@ export const LogoMotionOverlay: React.FC<LogoMotionOverlayProps> = ({
     const r = rendererRef.current;
     if (!r) return;
     r.setTransparentBackground(true);
-    r.renderAt(progress * config.durationSec, studioScrub);
+    r.renderAt(lastProgressRef.current * config.durationSec, studioScrub);
     r.getCanvas().toBlob((blob) => {
       if (blob) downloadBlob(blob, 'outerflow-logo-transparent.png');
       r.setTransparentBackground(false);
@@ -207,7 +242,7 @@ export const LogoMotionOverlay: React.FC<LogoMotionOverlayProps> = ({
     if (!ctx) return;
 
     r.setTransparentBackground(false);
-    r.renderAt(progress * config.durationSec, studioScrub ?? 0.52);
+    r.renderAt(lastProgressRef.current * config.durationSec, studioScrub ?? 0.52);
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, w, h);
     ctx.drawImage(glCanvas, 0, 0, w, h);
@@ -240,7 +275,7 @@ export const LogoMotionOverlay: React.FC<LogoMotionOverlayProps> = ({
     const ctx = comp.getContext('2d');
     if (!ctx) return;
     r.setTransparentBackground(false);
-    r.renderAt(progress * config.durationSec, 0.52);
+    r.renderAt(lastProgressRef.current * config.durationSec, 0.52);
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, 1280, 720);
     ctx.drawImage(glCanvas, 0, 0, 1280, 720);
@@ -314,9 +349,10 @@ export const LogoMotionOverlay: React.FC<LogoMotionOverlayProps> = ({
 
           {showTextInStudio && (
             <div
+              ref={typoElRef}
               className="intro-typography"
               style={{
-                opacity: studioScrub !== null ? tl.textOpacity : 1,
+                opacity: studioScrub !== null ? computeIntroTimeline(studioScrub).textOpacity : 1,
                 transform: 'translate(-50%, -50%)',
               }}
             >

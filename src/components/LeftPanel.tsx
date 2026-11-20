@@ -1,18 +1,26 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   ChevronsLeft,
   Copy,
   Eye,
   EyeOff,
+  Lock,
   RotateCcw,
   Trash2,
+  Unlock,
 } from 'lucide-react';
 import type {
   CadPartConfig,
   CadPrimitiveKind,
+  CircuitComponentKind,
+  CircuitSchematic,
   MathConfig,
   MathModeKind,
+  MeshSculptConfig,
+  PartCategory,
+  SculptBasePreset,
+  SculptBrushKind,
   ShadingMode,
   ShapeKind,
   SoftSimConfig,
@@ -22,6 +30,7 @@ import type {
   StudioMode,
 } from '../types/studio';
 import type { PhysicsPreset } from '../engines/physics/presets';
+import { PART_LIBRARY, type LibraryPartMeta } from '../engines/cad/partsLibrary';
 import { PARAMETRIC_PRESETS } from '../engines/math/parametricSurface';
 import { EXPLICIT_PRESETS } from '../engines/math/explicitSurface';
 import { IMPLICIT_PRESETS } from '../engines/math/marchingTetrahedra';
@@ -51,11 +60,22 @@ interface LeftPanelProps {
   onToggleEntityVisible: (id: string) => void;
   onDuplicateEntity: (id: string) => void;
   onDeleteEntity: (id: string) => void;
-  // CAD
+  // CAD & Library
   cadParts: CadPartConfig[];
   onAddCadPart: (kind: CadPrimitiveKind) => void;
+  onAddLibraryPart: (meta: LibraryPartMeta) => void;
   onToggleCadVisible: (id: string) => void;
+  onToggleCadLocked: (id: string) => void;
   onDeleteCadPart: (id: string) => void;
+  // Mesh Sculpt
+  meshConfig: MeshSculptConfig;
+  onSelectSculptPreset: (preset: SculptBasePreset) => void;
+  onSelectSculptBrush: (brush: SculptBrushKind) => void;
+  // Electronics
+  circuitPresets: CircuitSchematic[];
+  activeCircuitId: string;
+  onLoadCircuitPreset: (id: string) => void;
+  onAddCircuitComponent: (kind: CircuitComponentKind) => void;
   // Math
   mathConfig: MathConfig;
   onMathKindChange: (kind: MathModeKind) => void;
@@ -74,14 +94,49 @@ const PHYSICS_SHAPES: { shape: ShapeKind; label: string }[] = [
   { shape: 'cone', label: '+ Cone' },
 ];
 
-const CAD_KINDS: { kind: CadPrimitiveKind; label: string; sub: string }[] = [
-  { kind: 'box', label: 'Block', sub: 'Beveled cuboid' },
-  { kind: 'cylinder', label: 'Cylinder', sub: 'Solid shaft' },
-  { kind: 'pipe', label: 'Pipe', sub: 'Annular sleeve' },
-  { kind: 'gear', label: 'Spur Gear', sub: 'Involute teeth' },
-  { kind: 'bracket', label: 'L-Bracket', sub: 'Bolt holes' },
-  { kind: 'lathe', label: 'Nozzle', sub: 'Revolved shell' },
-  { kind: 'polygon', label: 'Hex Prism', sub: 'Bored polygon' },
+const CAD_KINDS: { kind: CadPrimitiveKind; label: string }[] = [
+  { kind: 'box', label: '+ Block' },
+  { kind: 'cylinder', label: '+ Cylinder' },
+  { kind: 'pipe', label: '+ Pipe' },
+  { kind: 'gear', label: '+ Gear' },
+  { kind: 'bracket', label: '+ Bracket' },
+  { kind: 'lathe', label: '+ Nozzle' },
+  { kind: 'polygon', label: '+ Hex' },
+];
+
+const PART_CATEGORIES: { id: PartCategory; label: string }[] = [
+  { id: 'robotics', label: 'Robotics' },
+  { id: 'electronics', label: 'Elec' },
+  { id: 'mechanical', label: 'Mech' },
+  { id: 'human', label: 'Human' },
+  { id: 'shapes', label: 'Shapes' },
+];
+
+const SCULPT_BASE_PRESETS: { id: SculptBasePreset; label: string; sub: string }[] = [
+  { id: 'humanHead', label: 'Human Head Bust', sub: 'Anatomical clay base' },
+  { id: 'sphere', label: 'Clay Sphere', sub: 'Watertight subdivided orb' },
+  { id: 'organicPod', label: 'Organic Bio-Pod', sub: 'Biomorphic organism base' },
+  { id: 'cube', label: 'Subdivided Cube', sub: 'Hard-surface sculpting block' },
+  { id: 'torus', label: 'Sculpt Torus', sub: 'Continuous ring mesh' },
+  { id: 'terrain', label: 'Terrain Mesh', sub: '42×42 landscape surface' },
+];
+
+const SCULPT_BRUSHES: { id: SculptBrushKind; label: string; sub: string }[] = [
+  { id: 'pull', label: 'Pull / Grab', sub: 'Draw surface outward along normal' },
+  { id: 'inflate', label: 'Inflate / Blob', sub: 'Expand along vertex normals' },
+  { id: 'carve', label: 'Carve / Crease', sub: 'Push inward to sculpt grooves' },
+  { id: 'smooth', label: 'Smooth', sub: 'Relax mesh surface smoothly' },
+  { id: 'flatten', label: 'Flatten', sub: 'Level region to tangent plane' },
+];
+
+const CIRCUIT_PALETTE: { kind: CircuitComponentKind; label: string }[] = [
+  { kind: 'battery', label: '+ Battery' },
+  { kind: 'resistor', label: '+ Resistor' },
+  { kind: 'led', label: '+ LED' },
+  { kind: 'capacitor', label: '+ Cap' },
+  { kind: 'switch', label: '+ Switch' },
+  { kind: 'motor', label: '+ Motor' },
+  { kind: 'mcu', label: '+ MCU' },
 ];
 
 export const LeftPanel: React.FC<LeftPanelProps> = ({
@@ -102,8 +157,17 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
   onDeleteEntity,
   cadParts,
   onAddCadPart,
+  onAddLibraryPart,
   onToggleCadVisible,
+  onToggleCadLocked,
   onDeleteCadPart,
+  meshConfig,
+  onSelectSculptPreset,
+  onSelectSculptBrush,
+  circuitPresets,
+  activeCircuitId,
+  onLoadCircuitPreset,
+  onAddCircuitComponent,
   mathConfig,
   onMathKindChange,
   onSelectMathPreset,
@@ -111,6 +175,21 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
   onSoftKindChange,
   onSoftParticlePreset,
 }) => {
+  const [partCat, setPartCat] = useState<PartCategory>('robotics');
+  const [partQuery, setPartQuery] = useState('');
+
+  const filteredLibrary = PART_LIBRARY.filter((p) => {
+    if (partQuery.trim()) {
+      const q = partQuery.toLowerCase();
+      return (
+        p.name.toLowerCase().includes(q) ||
+        p.description.toLowerCase().includes(q) ||
+        p.category.toLowerCase().includes(q)
+      );
+    }
+    return p.category === partCat;
+  });
+
   return (
     <aside className="side-panel">
       <div className="panel-header">
@@ -129,7 +208,6 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
       </div>
 
       <div className="panel-scroll">
-        {/* Mode-specific Presets & Creation */}
         {(mode === 'physics' || mode === 'experiments') && (
           <AccordionSection title="Physics Scenes & Spawn" defaultOpen>
             <div className="compact-grid">
@@ -161,21 +239,133 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
         )}
 
         {mode === 'cad' && (
-          <AccordionSection title="Parametric Primitives" defaultOpen>
-            <div className="compact-grid">
-              {CAD_KINDS.map((k) => (
-                <button
-                  key={k.kind}
-                  type="button"
-                  className="compact-btn"
-                  onClick={() => onAddCadPart(k.kind)}
-                >
-                  <span>+ {k.label}</span>
-                  <span className="compact-btn-sub">{k.sub}</span>
-                </button>
-              ))}
-            </div>
-          </AccordionSection>
+          <>
+            <AccordionSection title="3D Parts Library" defaultOpen>
+              <input
+                className="input-text"
+                placeholder="Search robotics, human, electronics..."
+                value={partQuery}
+                onChange={(e) => setPartQuery(e.target.value)}
+              />
+              {!partQuery.trim() && (
+                <div className="cat-pill-row">
+                  {PART_CATEGORIES.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={`cat-pill ${partCat === c.id ? 'active' : ''}`}
+                      onClick={() => setPartCat(c.id)}
+                    >
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="hierarchy-list" style={{ maxHeight: 195, overflowY: 'auto' }}>
+                {filteredLibrary.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className="compact-btn"
+                    onClick={() => onAddLibraryPart(item)}
+                    title={item.description}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+                      <span className="color-dot" style={{ background: item.defaultColor }} />
+                      <span>+ {item.name}</span>
+                    </div>
+                    <span className="compact-btn-sub">{item.description}</span>
+                  </button>
+                ))}
+              </div>
+            </AccordionSection>
+
+            <AccordionSection title="Quick Parametric Shapes" defaultOpen={false}>
+              <div className="compact-grid">
+                {CAD_KINDS.map((k) => (
+                  <button
+                    key={k.kind}
+                    type="button"
+                    className="compact-btn"
+                    onClick={() => onAddCadPart(k.kind)}
+                  >
+                    <span>{k.label}</span>
+                  </button>
+                ))}
+              </div>
+            </AccordionSection>
+          </>
+        )}
+
+        {mode === 'mesh' && (
+          <>
+            <AccordionSection title="Base Mesh Presets" defaultOpen>
+              <div className="compact-grid">
+                {SCULPT_BASE_PRESETS.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className={`compact-btn ${meshConfig.basePreset === p.id ? 'active' : ''}`}
+                    onClick={() => onSelectSculptPreset(p.id)}
+                    title={p.sub}
+                  >
+                    <span>{p.label}</span>
+                  </button>
+                ))}
+              </div>
+            </AccordionSection>
+
+            <AccordionSection title="Sculpt Brushes" defaultOpen>
+              <div className="hierarchy-list">
+                {SCULPT_BRUSHES.map((b) => (
+                  <button
+                    key={b.id}
+                    type="button"
+                    className={`compact-btn ${meshConfig.brush === b.id ? 'active' : ''}`}
+                    onClick={() => onSelectSculptBrush(b.id)}
+                  >
+                    <span>{b.label}</span>
+                    <span className="compact-btn-sub">{b.sub}</span>
+                  </button>
+                ))}
+              </div>
+            </AccordionSection>
+          </>
+        )}
+
+        {mode === 'electronics' && (
+          <>
+            <AccordionSection title="Circuit Templates" defaultOpen>
+              <div className="hierarchy-list">
+                {circuitPresets.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    className={`compact-btn ${activeCircuitId === c.id ? 'active' : ''}`}
+                    onClick={() => onLoadCircuitPreset(c.id)}
+                  >
+                    <span>{c.name}</span>
+                    <span className="compact-btn-sub">{c.description}</span>
+                  </button>
+                ))}
+              </div>
+            </AccordionSection>
+
+            <AccordionSection title="Add Component" defaultOpen>
+              <div className="compact-grid">
+                {CIRCUIT_PALETTE.map((item) => (
+                  <button
+                    key={item.kind}
+                    type="button"
+                    className="compact-btn"
+                    onClick={() => onAddCircuitComponent(item.kind)}
+                  >
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            </AccordionSection>
+          </>
         )}
 
         {mode === 'math' && (
@@ -323,10 +513,10 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
           </AccordionSection>
         )}
 
-        {/* Scene Section (Image 1 Style) */}
+        {/* Scene Section */}
         <AccordionSection
           title="Scene"
-          defaultOpen
+          defaultOpen={false}
           rightAction={
             <button
               type="button"
@@ -392,8 +582,8 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
           />
         </AccordionSection>
 
-        {/* Object / Display Section (Image 1 Style) */}
-        <AccordionSection title="Object" defaultOpen>
+        {/* Object Display Section */}
+        <AccordionSection title="Object Display" defaultOpen={false}>
           <span className="field-label">Material</span>
           <SegmentedControl<ShadingMode>
             value={stage.shading}
@@ -481,7 +671,7 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
         )}
 
         {mode === 'cad' && (
-          <AccordionSection title={`CAD Parts (${cadParts.length})`} defaultOpen>
+          <AccordionSection title={`CAD Assembly (${cadParts.length})`} defaultOpen>
             <div className="hierarchy-list">
               {cadParts.map((part) => (
                 <div
@@ -493,10 +683,18 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
                     <span className="color-dot" style={{ background: part.color }} />
                     <span className="hierarchy-name">{part.name}</span>
                     <span className="hierarchy-tag">
-                      {part.csgMesh ? 'CSG' : part.kind}
+                      {part.locked ? 'FIX' : part.csgMesh ? 'MESH' : part.kind}
                     </span>
                   </div>
                   <div style={{ display: 'flex', gap: 1 }} onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      className="mini-icon-btn"
+                      onClick={() => onToggleCadLocked(part.id)}
+                      title={part.locked ? 'Unlock Part' : 'Fix / Lock Part in Place'}
+                    >
+                      {part.locked ? <Lock size={12} color="#f59e0b" /> : <Unlock size={12} />}
+                    </button>
                     <button
                       type="button"
                       className="mini-icon-btn"

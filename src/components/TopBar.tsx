@@ -3,12 +3,14 @@ import {
   Activity,
   Atom,
   Box,
+  Cpu,
   Download,
   Film,
   FlaskConical,
   Grid3x3,
   Maximize2,
   Minimize2,
+  PenTool,
   RotateCcw,
   Sigma,
   Sparkles,
@@ -46,10 +48,12 @@ interface TopBarProps {
 
 const MODES: { id: StudioMode; label: string; icon: React.ReactNode }[] = [
   { id: 'physics', label: 'Physics', icon: <Atom size={13} /> },
-  { id: 'cad', label: 'CAD & CSG', icon: <Box size={13} /> },
+  { id: 'cad', label: 'CAD & Parts', icon: <Box size={13} /> },
+  { id: 'mesh', label: 'Mesh', icon: <PenTool size={13} /> },
+  { id: 'electronics', label: 'Electronics', icon: <Cpu size={13} /> },
   { id: 'math', label: 'Math', icon: <Sigma size={13} /> },
-  { id: 'soft', label: 'Soft & Fluid', icon: <Waves size={13} /> },
-  { id: 'experiments', label: 'Experiments', icon: <FlaskConical size={13} /> },
+  { id: 'soft', label: 'Soft', icon: <Waves size={13} /> },
+  { id: 'experiments', label: 'Lab', icon: <FlaskConical size={13} /> },
 ];
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -95,7 +99,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             secondaryColor={logoConfig.secondaryColor}
           />
           <span className="brand-name">OUTERFLOW</span>
-          <span className="brand-sub">Harboria Labs</span>
+          <span className="brand-sub hide-md">Harboria Labs</span>
         </button>
 
         <nav className="mode-pills" aria-label="Studio Modes">
@@ -116,12 +120,12 @@ export const TopBar: React.FC<TopBarProps> = ({
       <div className="topbar-actions">
         <button
           type="button"
-          className="top-btn"
+          className="top-btn hide-sm"
           onClick={onReplayBootIntro}
           title="Replay 3D Fluid Intro"
         >
           <Sparkles size={13} />
-          <span>Intro</span>
+          <span className="hide-md">Intro</span>
         </button>
 
         <button
@@ -131,12 +135,14 @@ export const TopBar: React.FC<TopBarProps> = ({
           title="Record 60fps 3D Viewport Video (.webm)"
         >
           {videoRecording ? <span className="rec-dot" /> : <Film size={13} />}
-          <span>{videoRecording ? `Stop ${videoElapsedSec}s` : 'Rec Video'}</span>
+          <span className="hide-sm">
+            {videoRecording ? `Stop ${videoElapsedSec}s` : 'Rec Video'}
+          </span>
         </button>
 
         <button
           type="button"
-          className="top-btn"
+          className="top-btn hide-sm"
           onClick={onResetSim}
           title="Reset Active Simulation"
         >
@@ -145,7 +151,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         <button
           type="button"
-          className={`top-btn ${stage.showGrid ? 'active' : ''}`}
+          className={`top-btn hide-md ${stage.showGrid ? 'active' : ''}`}
           onClick={() => onStageChange({ ...stage, showGrid: !stage.showGrid })}
           title="Toggle Studio Floor Grid"
         >
@@ -154,7 +160,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         <button
           type="button"
-          className={`top-btn ${telemetryOpen ? 'active' : ''}`}
+          className={`top-btn hide-sm ${telemetryOpen ? 'active' : ''}`}
           onClick={onToggleTelemetry}
           title="Toggle Telemetry & Sweep Drawer"
         >
@@ -184,12 +190,11 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         <button
           type="button"
-          className="top-btn"
+          className="top-btn hide-md"
           onClick={() => fileInputRef.current?.click()}
           title="Load .outerflow.json scene"
         >
           <Upload size={13} />
-          <span>Load</span>
         </button>
 
         <button
@@ -213,6 +218,17 @@ export const TopBar: React.FC<TopBarProps> = ({
               }}
             >
               <span>Save Project</span>
+              <span className="hierarchy-tag">.json</span>
+            </button>
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={() => {
+                fileInputRef.current?.click();
+                setExportOpen(false);
+              }}
+            >
+              <span>Load Project</span>
               <span className="hierarchy-tag">.json</span>
             </button>
             <button
