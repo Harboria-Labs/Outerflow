@@ -1449,6 +1449,211 @@ body,
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.65);
 }
 
+/* Top-Center Dynamic Island Command, Telemetry & Element Launcher Hub */
+.dynamic-island-container {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: calc(100% - 28px);
+}
+
+.dynamic-island-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(11, 13, 19, 0.88);
+  backdrop-filter: blur(18px);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.dynamic-island-container.expanded .dynamic-island-pill,
+.dynamic-island-pill:hover {
+  border-color: rgba(56, 189, 248, 0.55);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(56, 189, 248, 0.2);
+}
+
+.dynamic-island-status-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.05);
+  color: #f8fafc;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+}
+
+.island-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #64748b;
+}
+
+.island-pulse-dot.live {
+  background: #34d399;
+  box-shadow: 0 0 8px #34d399;
+}
+
+.island-divider {
+  width: 1px;
+  height: 15px;
+  background: rgba(148, 163, 184, 0.22);
+}
+
+.dynamic-island-metrics {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #cbd5e1;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.island-metric strong {
+  color: #f8fafc;
+  font-weight: 600;
+}
+
+.dynamic-island-quick-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.island-mini-btn,
+.island-expand-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.06);
+  color: #cbd5e1;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.island-mini-btn:hover,
+.island-expand-trigger:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.island-mini-btn.active {
+  background: rgba(38, 128, 235, 0.24);
+  color: #93c5fd;
+  border-color: rgba(56, 189, 248, 0.5);
+}
+
+.dynamic-island-drawer {
+  margin-top: 8px;
+  width: min(680px, calc(100vw - 32px));
+  background: rgba(12, 15, 23, 0.96);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: 14px;
+  padding: 10px 12px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.75);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.island-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid var(--border);
+}
+
+.island-search-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: #f8fafc;
+  font-size: 11.5px;
+  outline: none;
+}
+
+.island-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.island-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.island-col-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+
+.island-result-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+  color: #e2e8f0;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.12s ease;
+}
+
+.island-result-item:hover {
+  background: rgba(56, 189, 248, 0.14);
+  border-color: rgba(56, 189, 248, 0.45);
+}
+
+.island-footer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 6px;
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+  font-size: 10.5px;
+  color: #94a3b8;
+}
+
 .schematic-header {
   height: 32px;
   min-height: 32px;

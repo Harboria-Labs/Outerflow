@@ -5,6 +5,7 @@ export type StudioMode =
   | 'electronics'
   | 'math'
   | 'soft'
+  | 'system'
   | 'experiments';
 
 export type Vec3 = [number, number, number];

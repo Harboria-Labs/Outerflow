@@ -45,6 +45,7 @@ import {
 } from './engines/cad/parametricGenerators';
 import { csgIntersect, csgSubtract, csgUnion } from './engines/cad/csg';
 import {
+  PART_LIBRARY,
   computeSnapPosition,
   createCadPartFromLibrary,
   type LibraryPartMeta,
@@ -145,6 +146,14 @@ import { TransportBar } from './components/TransportBar';
 import { TelemetryDrawer } from './components/TelemetryDrawer';
 import { ScriptConsoleDrawer } from './components/ScriptConsoleDrawer';
 import { ElectronicsSchematicView } from './components/ElectronicsSchematicView';
+import { DynamicIslandHUD } from './components/DynamicIslandHUD';
+import { SystemGraphWorkspace } from './components/SystemGraphWorkspace';
+import {
+  SYSTEM_GRAPH_PRESETS,
+  createNodeFromDefinition,
+  type SystemGraphModel,
+  type UnifiedElementDefinition,
+} from './engines/project/systemGraphEngine';
 
 function createInitialMathConfig(): MathConfig {
   return {
@@ -289,6 +298,11 @@ export const App: React.FC = () => {
 
   // Soft / Fields State
   const [softConfig, setSoftConfig] = useState<SoftSimConfig>(() => createDefaultSoftConfig());
+
+  // Multidisciplinary System Graph State (Section 4, 8, 9 & 17)
+  const [systemGraph, setSystemGraph] = useState<SystemGraphModel>(() =>
+    structuredClone(SYSTEM_GRAPH_PRESETS[0])
+  );
 
   // Experiments & Programmable Engineering Script State
   const [experimentScript, setExperimentScript] = useState<string>(
@@ -2210,6 +2224,35 @@ export const App: React.FC = () => {
     }
   };
 
+  // Start with a completely empty project workspace (Section 2 & 17 Acceptance Criterion #1)
+  const handleNewBlankProject = () => {
+    pushHistorySnapshot(true);
+    setRunning(false);
+    setActivePhysicsPresetId('blank-project');
+    setEntities([]);
+    setJoints([]);
+    setCadParts([]);
+    setParameters([]);
+    setSelectedId(null);
+    setCheckpoints([]);
+    setTelemetrySamples([]);
+    void syncPhysicsWorldAndViewport([], [], gravity);
+  };
+
+  const handleAddSystemGraphElement = (def: UnifiedElementDefinition) => {
+    setSystemGraph((prev) => {
+      const count = prev.nodes.length;
+      const node = createNodeFromDefinition(def.id, {
+        x: 75 + (count % 4) * 245,
+        y: 75 + Math.floor(count / 4) * 175,
+      });
+      return {
+        ...prev,
+        nodes: [...prev.nodes, node],
+      };
+    });
+  };
+
   const selectedEntity = useMemo(
     () => entities.find((e) => e.id === selectedId) ?? null,
     [entities, selectedId]
@@ -2244,6 +2287,7 @@ export const App: React.FC = () => {
         onToggleVideoRecord={() => void handleToggleVideoRecord()}
         onOpenLogoStudio={() => setIntroOverlayMode('studio')}
         onReplayBootIntro={() => setIntroOverlayMode('boot')}
+        onNewBlankProject={handleNewBlankProject}
         onResetSim={handleReset}
         onSaveScene={handleSaveScene}
         onLoadScene={handleLoadScene}
@@ -2270,7 +2314,7 @@ export const App: React.FC = () => {
       />
 
       <div className="workspace-body">
-        {!leftCollapsed && (
+        {!leftCollapsed && mode !== 'system' && (
           <LeftPanel
             mode={mode}
             onCollapse={() => setLeftCollapsed(true)}
@@ -2352,6 +2396,36 @@ export const App: React.FC = () => {
               </button>
             )}
 
+            <DynamicIslandHUD
+              mode={mode}
+              onModeChange={handleModeChange}
+              running={running}
+              simTime={simTime}
+              fps={fps}
+              entitiesCount={entities.length}
+              cadCount={cadParts.filter((c) => c.visible).length}
+              graphNodesCount={systemGraph.nodes.length}
+              latestTelemetry={latestTelemetry}
+              scriptOpen={scriptConsoleOpen}
+              onToggleScript={() => setScriptConsoleOpen((o) => !o)}
+              telemetryOpen={telemetryOpen}
+              onToggleTelemetry={() => setTelemetryOpen((o) => !o)}
+              onToggleRun={() => {
+                setPlaybackIndex(null);
+                setRunning((r) => !r);
+              }}
+              onResetSim={handleReset}
+              onNewBlankProject={handleNewBlankProject}
+              onSpawnLibraryPart={(partId) => {
+                const foundMeta = PART_LIBRARY.find((p) => p.id === partId);
+                if (foundMeta) {
+                  handleAddLibraryPart(foundMeta);
+                  if (mode === 'system') handleModeChange('cad');
+                }
+              }}
+              onAddSystemGraphElement={handleAddSystemGraphElement}
+            />
+
             <ViewportHUD
               mode={mode}
               fps={fps}
@@ -2385,6 +2459,21 @@ export const App: React.FC = () => {
               onToggleSwitch={handleToggleCircuitSwitch}
               onClose={() => setSchematicOpen(false)}
             />
+
+            {mode === 'system' && (
+              <SystemGraphWorkspace
+                graph={systemGraph}
+                onGraphChange={setSystemGraph}
+                onSpawnElementIn3D={(partId) => {
+                  const foundMeta = PART_LIBRARY.find((p) => p.id === partId);
+                  if (foundMeta) {
+                    handleAddLibraryPart(foundMeta);
+                    handleModeChange('cad');
+                  }
+                }}
+                onNewBlankProject={handleNewBlankProject}
+              />
+            )}
 
             <TransportBar
               simTime={simTime}
@@ -2445,7 +2534,7 @@ export const App: React.FC = () => {
           />
         </main>
 
-        {!rightCollapsed && (
+        {!rightCollapsed && mode !== 'system' && (
           <RightPanel
             mode={mode}
             onCollapse={() => setRightCollapsed(true)}

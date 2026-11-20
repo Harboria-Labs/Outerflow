@@ -8,7 +8,9 @@ import {
   Cpu,
   Download,
   Film,
+  FilePlus2,
   FlaskConical,
+  GitBranch,
   Grid3x3,
   Maximize2,
   Minimize2,
@@ -46,6 +48,7 @@ interface TopBarProps {
   onToggleVideoRecord: () => void;
   onOpenLogoStudio: () => void;
   onReplayBootIntro: () => void;
+  onNewBlankProject?: () => void;
   onResetSim: () => void;
   onSaveScene: () => void;
   onLoadScene: (file: File) => void;
@@ -64,6 +67,7 @@ const MODES: { id: StudioMode; label: string; icon: React.ReactNode }[] = [
   { id: 'electronics', label: 'Electronics', icon: <Cpu size={13} /> },
   { id: 'math', label: 'Math', icon: <Sigma size={13} /> },
   { id: 'soft', label: 'Soft', icon: <Waves size={13} /> },
+  { id: 'system', label: 'System Graph', icon: <GitBranch size={13} /> },
   { id: 'experiments', label: 'Lab', icon: <FlaskConical size={13} /> },
 ];
 
@@ -89,6 +93,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onToggleVideoRecord,
   onOpenLogoStudio,
   onReplayBootIntro,
+  onNewBlankProject,
   onResetSim,
   onSaveScene,
   onLoadScene,
@@ -136,6 +141,18 @@ export const TopBar: React.FC<TopBarProps> = ({
       </div>
 
       <div className="topbar-actions">
+        {onNewBlankProject && (
+          <button
+            type="button"
+            className="top-btn hide-sm"
+            onClick={onNewBlankProject}
+            title="Start with an Empty Project (Section 2 Fundamental Construction Principle)"
+          >
+            <FilePlus2 size={13} />
+            <span className="hide-md">New Blank</span>
+          </button>
+        )}
+
         <button
           type="button"
           className="top-btn hide-sm"
