@@ -25,10 +25,19 @@ import type {
   StepRuntimeApi,
 } from '../experiments/scriptRunner';
 import { syncEntityPhysicalMass } from './parameterAndTemplateEngine';
+import {
+  type ScriptLanguage,
+  detectScriptLanguage,
+  transpileToOuterflowJS,
+} from './scriptTranspilers';
+
+export type { ScriptLanguage };
+export { detectScriptLanguage };
 
 export interface UniversalScriptTemplate {
   id: string;
   name: string;
+  language?: ScriptLanguage;
   category: 'robotics' | 'cad-csg' | 'control' | 'electronics' | 'structural';
   description: string;
   code: string;
@@ -468,6 +477,226 @@ outerflow.onStep((t, api) => {
 outerflow.print('Generated ' + spans + '-span bridge + 9.5 kg dynamic drop load.');
 `,
   },
+  {
+    id: 'python-parametric-gearbox',
+    name: '[Python .py] Parametric CSG Gearbox & Raspberry Pi 4 Rig',
+    language: 'python',
+    category: 'cad-csg',
+    description:
+      'Python engineering script using def, for-in-range, math, CSG boolean machining, and a 60Hz on_step servo controller',
+    code: `# Outerflow Python (.py) Engineering Script: Parametric CSG Gearbox & Raspberry Pi 4 Rig
+import outerflow
+import math
+
+outerflow.clear()
+outerflow.set_gravity(0, -9.81, 0)
+
+# 1. Machine an aluminum gearbox mount with CSG boolean subtraction
+housing_raw = design.box(1.8, 2.2, 0.9)
+bore_hole = design.translate(design.rotate(design.cylinder(0.32, 1.4), math.pi / 2, 0, 0), 0, 0.55, 0)
+housing = design.paint(design.subtract(housing_raw, bore_hole), '#334155')
+
+mount_id = design.spawn_body(housing, id='py-mount', name='Python CSG Mount', body_type='fixed', pos=[0, 1.1, -0.65])
+
+# 2. Build a 20-tooth drive gear + Raspberry Pi 4 telemetry payload
+gear = design.paint(design.gear(20, 0.92, 0.3), '#38bdf8')
+arm = design.paint(design.translate(design.box(2.1, 0.25, 0.25), 1.05, 0, 0), '#34d399')
+rpi4 = design.translate(design.scale(design.library('raspberry-pi-4'), 0.5, 0.5, 0.5), 1.95, 0.18, 0)
+rotor_geom = design.union(gear, design.union(arm, rpi4))
+
+rotor_id = design.spawn_body(rotor_geom, id='py-rotor', name='RPi4 Gear Rotor', pos=[0, 1.65, 0], density=2700)
+
+drive_joint = outerflow.add_joint(id='py-drive', name='Python Gear Servo', kind='revolute', body_a=mount_id, body_b=rotor_id, anchor_a=[0, 0.55, 0.65], anchor_b=[-0.65, 0, 0], axis=[0, 0, 1], motor_speed=3.2, motor_max_force=35)
+
+# 3. Spawn a row of 4 dynamic calibration spheres using Python range()
+for i in range(4):
+  px = -2.4 + i * 1.6
+  outerflow.spawn_sphere(name='Probe Sphere ' + str(i + 1), pos=[px, 3.2 + i * 0.4, 1.2], radius=0.32, mass=1.1, restitution=0.65, color='#f59e0b')
+
+def on_step(t, api):
+  target_speed = math.sin(t * 1.8) * 4.5
+  api.set_motor(drive_joint, target_speed, 38)
+  st = api.get_state(rotor_id)
+  if st:
+    api.log_metric('pyRotorY', st.pos[1])
+    api.log_metric('pyTargetVel', target_speed)
+
+print('Python (.py) CSG Gearbox + Raspberry Pi 4 rig compiled and running at 60Hz.')
+`,
+  },
+  {
+    id: 'python-esp32-linear-sled',
+    name: '[Python .py] Multi-Sensor ESP32 Robotics & PD Controller',
+    language: 'python',
+    category: 'robotics',
+    description:
+      'Python robotics script that spawns a 3D ESP32 + Ultrasonic actuator rig with closed-loop proportional-derivative control',
+    code: `# Outerflow Python (.py) Robotics Script: ESP32 + Ultrasonic Linear Servo PD Controller
+import outerflow
+import math
+
+outerflow.clear()
+outerflow.set_gravity(0, -9.81, 0)
+
+rail_id = outerflow.spawn_box(id='py-rail', name='Linear Guide Base', body_type='fixed', pos=[0, 0.25, 0], size=[6.0, 0.5, 1.4], color='#1e293b')
+
+# Combine ESP32 DevKit V1 + HC-SR04 Ultrasonic Sensor into an active slider carriage
+carriage_base = design.paint(design.box(1.4, 0.35, 1.0), '#0284c7')
+esp32 = design.translate(design.scale(design.library('esp32-devkit-v1'), 0.65, 0.65, 0.65), -0.2, 0.25, 0)
+sonar = design.translate(design.scale(design.library('hc-sr04-ultrasonic'), 0.65, 0.65, 0.65), 0.4, 0.28, 0)
+sled_geom = design.union(carriage_base, design.union(esp32, sonar))
+
+sled_id = design.spawn_body(sled_geom, id='py-sled', name='ESP32 Linear Sled', pos=[-2.0, 0.85, 0], mass=2.2)
+
+outerflow.add_joint(id='py-slider', name='Prismatic Linear Rail', kind='prismatic', body_a=rail_id, body_b=sled_id, anchor_a=[0, 0.5, 0], anchor_b=[0, 0, 0], axis=[1, 0, 0])
+
+def on_step(t, api):
+  st = api.get_state(sled_id)
+  if not st:
+    return
+  setpoint = math.sin(t * 1.4) * 2.2
+  err = setpoint - st.pos[0]
+  force_x = 42.0 * err - 11.0 * st.vel[0]
+  api.apply_force(sled_id, [force_x, 0, 0])
+  api.log_metric('sledX', st.pos[0])
+  api.log_metric('setpointX', setpoint)
+
+print('Python (.py) ESP32 Linear Servo Sled active.')
+`,
+  },
+  {
+    id: 'cpp-arduino-servo-rig',
+    name: '[C++ / Arduino .ino] Arduino Uno R3 + Servo & Sonar Firmware',
+    language: 'cpp',
+    category: 'robotics',
+    description:
+      'C++ / Arduino setup() & loop(float t) firmware driving a 3D Arduino Uno R3, SG90 Servo turret, and PWM telemetry',
+    code: `// Outerflow C++ / Arduino (.cpp / .ino) Engineering & Firmware Script
+#include <Outerflow.h>
+#include <Arduino.h>
+
+#define LED_PIN 13
+#define PWM_PIN 5
+
+EntityId baseId;
+EntityId turretId;
+JointId servoJoint;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(PWM_PIN, OUTPUT);
+
+  outerflow::clear();
+  outerflow::setGravity(0.0f, -9.81f, 0.0f);
+
+  // 1. Spawn fixed 3D Arduino Uno R3 controller base
+  auto pedestal = design::paint(design::box(2.2f, 0.35f, 1.6f), "#1e293b");
+  auto uno = design::translate(design::scale(design::library("arduino-uno-r3"), 0.75f, 0.75f, 0.75f), 0.0f, 0.25f, 0.0f);
+  baseId = design::spawnBody(design::union(pedestal, uno), {
+    name: "Arduino Uno R3 Base",
+    bodyType: "fixed",
+    pos: {0.0f, 0.45f, 0.0f}
+  });
+
+  // 2. Build rotating Ultrasonic Radar Turret
+  auto mast = design::paint(design::cylinder(0.22f, 0.9f), "#38bdf8");
+  auto sonar = design::translate(design::scale(design::library("hc-sr04-ultrasonic"), 0.75f, 0.75f, 0.75f), 0.0f, 0.55f, 0.25f);
+  turretId = design::spawnBody(design::union(mast, sonar), {
+    name: "SG90 Sonar Radar Turret",
+    pos: {0.0f, 1.45f, 0.0f},
+    mass: 1.4f
+  });
+
+  servoJoint = outerflow::addJoint({
+    name: "SG90 Pan Servo",
+    kind: "revolute",
+    bodyA: baseId,
+    bodyB: turretId,
+    anchorA: {0.0f, 0.55f, 0.0f},
+    anchorB: {0.0f, -0.45f, 0.0f},
+    axis: {0.0f, 1.0f, 0.0f},
+    motorSpeed: 2.5f,
+    motorMaxForce: 28.0f
+  });
+
+  Serial.println("C++ / Arduino setup() complete: 3D Uno R3 + Sonar Radar Turret online.");
+}
+
+void loop(float t, StepApi& api) {
+  float sweepVel = std::sin(t * 2.2f) * 3.8f;
+  api.setMotor(servoJoint, sweepVel, 30.0f);
+
+  int ledState = (std::sin(t * 6.0f) >= 0.0f) ? HIGH : LOW;
+  digitalWrite(LED_PIN, ledState);
+  analogWrite(PWM_PIN, (int)map(std::sin(t * 2.2f), -1.0f, 1.0f, 0.0f, 255.0f));
+}
+`,
+  },
+  {
+    id: 'cpp-csg-reaction-wheel',
+    name: '[C++ .cpp] Typed CSG Reaction Wheel & Attitude Controller',
+    language: 'cpp',
+    category: 'control',
+    description:
+      'Modern C++ script using design::subtract, design::gear, and a 60Hz loop() reaction torque controller',
+    code: `// Outerflow Modern C++ (.cpp) Engineering Script: CSG Reaction Wheel Pendulum
+#include <Outerflow.h>
+#include <cmath>
+
+EntityId standId;
+EntityId armId;
+JointId wheelMotor;
+
+void setup() {
+  outerflow::clear();
+  outerflow::setGravity(0.0f, -9.81f, 0.0f);
+
+  // Machine support tower using C++ CSG operations
+  auto rawTower = design::box(1.1f, 2.6f, 0.9f);
+  auto cutout = design::translate(design::cylinder(0.32f, 1.2f), 0.0f, 0.6f, 0.0f);
+  auto towerGeom = design::paint(design::subtract(rawTower, cutout), "#475569");
+
+  standId = design::spawnBody(towerGeom, {
+    name: "C++ Machined Stand",
+    bodyType: "fixed",
+    pos: {0.0f, 1.3f, -0.6f}
+  });
+
+  // Build reaction gear flywheel + balancing arm
+  auto wheel = design::paint(design::gear(22, 0.95f, 0.28f), "#22d3ee");
+  auto bar = design::paint(design::translate(design::box(2.2f, 0.24f, 0.22f), 1.0f, 0.0f, 0.0f), "#a78bfa");
+  armId = design::spawnBody(design::union(wheel, bar), {
+    name: "C++ Reaction Wheel Arm",
+    pos: {0.0f, 2.1f, 0.0f},
+    density: 7800.0f
+  });
+
+  wheelMotor = outerflow::addJoint({
+    name: "Flywheel Torque Drive",
+    kind: "revolute",
+    bodyA: standId,
+    bodyB: armId,
+    anchorA: {0.0f, 0.8f, 0.6f},
+    anchorB: {-0.75f, 0.0f, 0.0f},
+    axis: {0.0f, 0.0f, 1.0f},
+    motorSpeed: 3.5f,
+    motorMaxForce: 40.0f
+  });
+
+  outerflow::print("C++ Reaction Wheel Pendulum compiled (7800 kg/m³ steel).");
+}
+
+void loop(float t, StepApi& api) {
+  float cmd = std::cos(t * 2.0f) * 5.2f;
+  api.setMotor(wheelMotor, cmd, 42.0f);
+  auto st = api.getState(armId);
+  if (st) {
+    api.logMetric("cppArmAltitude", st.pos[1]);
+  }
+}
+`,
+  },
 ];
 
 export interface SpawnPartOpts {
@@ -488,6 +717,7 @@ export interface SpawnPartOpts {
 export interface UniversalScriptResult {
   ok: boolean;
   error?: string;
+  language: ScriptLanguage;
   targetMode: StudioMode | null;
   entities: StudioEntity[];
   joints: StudioJoint[];
@@ -511,6 +741,7 @@ export function executeUniversalScript(
     parameters?: ProjectParameter[];
     workbenchConfig?: WorkbenchConfig;
     gravity?: Vec3;
+    language?: ScriptLanguage | 'auto';
   }
 ): UniversalScriptResult {
   const entities: StudioEntity[] = initialContext?.entities
@@ -1025,8 +1256,13 @@ export function executeUniversalScript(
     },
   };
 
+  const { jsCode, detectedLanguage } = transpileToOuterflowJS(
+    code,
+    initialContext?.language ?? 'auto'
+  );
+
   try {
-    const fn = new Function('outerflow', 'design', 'world', 'bench', 'Math', code);
+    const fn = new Function('outerflow', 'design', 'world', 'bench', 'Math', jsCode);
     fn(outerflow, design, outerflow, bench, Math);
 
     const targetMode: StudioMode | null =
@@ -1041,6 +1277,7 @@ export function executeUniversalScript(
 
     return {
       ok: true,
+      language: detectedLanguage,
       targetMode,
       entities,
       joints,
@@ -1057,7 +1294,8 @@ export function executeUniversalScript(
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: `[${detectedLanguage.toUpperCase()}] ${err instanceof Error ? err.message : String(err)}`,
+      language: detectedLanguage,
       targetMode: null,
       entities,
       joints,
