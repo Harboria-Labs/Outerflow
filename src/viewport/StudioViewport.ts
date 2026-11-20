@@ -14,6 +14,7 @@ import type {
 } from '../types/studio';
 import { createParametricGeometry, deserializeMeshData } from '../engines/cad/parametricGenerators';
 import type { JointVisualSegment } from '../engines/physics/rapierEngine';
+import { captureTransparentViewportPNG } from '../engines/io/mediaExporters';
 
 export interface ViewportCallbacks {
   onSelectObject?: (id: string | null) => void;
@@ -101,6 +102,7 @@ export class StudioViewport {
 
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
+      alpha: true,
       preserveDrawingBuffer: true,
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -719,6 +721,19 @@ export class StudioViewport {
     if (mode === 'math') return this.mathGroup;
     if (mode === 'soft') return this.softGroup;
     return this.physicsGroup;
+  }
+
+  captureTransparentPNG(filename = 'outerflow-transparent.png'): void {
+    const prevGizmoVis = this.transform.getHelper().visible;
+    this.transform.getHelper().visible = false;
+    captureTransparentViewportPNG(
+      this.renderer,
+      this.scene,
+      this.camera,
+      [this.floorMesh, this.reflector, this.gridHelper, this.axesHelper],
+      filename
+    );
+    this.transform.getHelper().visible = prevGizmoVis;
   }
 
   render(): void {

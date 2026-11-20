@@ -1120,3 +1120,170 @@ body,
   background: var(--accent-soft);
   color: #93c5fd;
 }
+
+.brand-chip-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 9px 4px 6px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.brand-chip-btn:hover {
+  background: var(--bg-surface);
+  border-color: var(--border);
+}
+
+.top-btn.rec-active {
+  background: rgba(251, 113, 133, 0.18);
+  border-color: rgba(251, 113, 133, 0.55);
+  color: #fda4af;
+}
+
+.rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fb7185;
+  animation: pulseRec 1s infinite ease-in-out;
+}
+
+@keyframes pulseRec {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.82); }
+}
+
+/* Fullscreen Boot Motion Intro Overlay */
+.intro-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #000000;
+  cursor: pointer;
+  overflow: hidden;
+  user-select: none;
+}
+
+.intro-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.intro-typography {
+  position: absolute;
+  left: 50%;
+  top: 52%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: min(90vw, 760px);
+  text-shadow: 0 4px 28px rgba(0, 0, 0, 0.92);
+}
+
+.intro-lab {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.36em;
+  text-transform: uppercase;
+  color: #a1a1aa;
+  margin-bottom: 10px;
+}
+
+.intro-title {
+  margin: 0;
+  font-size: clamp(26px, 4.4vw, 48px);
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: #f8fafc;
+  line-height: 1.1;
+}
+
+.intro-divider {
+  height: 1.5px;
+  margin: 14px 0 12px 0;
+  border-radius: 2px;
+}
+
+.intro-tagline {
+  margin: 0;
+  font-size: clamp(13px, 1.5vw, 17px);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  color: #e4e4e7;
+}
+
+.intro-footer {
+  position: absolute;
+  bottom: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.intro-progress-track {
+  width: 180px;
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.intro-progress-fill {
+  height: 100%;
+  transition: width 0.05s linear;
+}
+
+.intro-skip-hint {
+  font-size: 11px;
+  color: #71717a;
+  letter-spacing: 0.04em;
+}
+
+/* Interactive 3D Logo & Motion Studio */
+.logo-studio-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: var(--bg-void);
+  display: flex;
+  flex-direction: column;
+}
+
+.logo-studio-topbar {
+  height: 44px;
+  min-height: 44px;
+  background: var(--bg-topbar);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+}
+
+.logo-studio-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.logo-studio-stage {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  background: #000000;
+  overflow: hidden;
+}

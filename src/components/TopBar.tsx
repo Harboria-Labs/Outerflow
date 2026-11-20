@@ -3,28 +3,36 @@ import {
   Activity,
   Atom,
   Box,
-  Cpu,
   Download,
+  Film,
   FlaskConical,
   Grid3x3,
   Maximize2,
   Minimize2,
   RotateCcw,
   Sigma,
+  Sparkles,
   Upload,
   Waves,
 } from 'lucide-react';
-import type { StageSettings, StudioMode } from '../types/studio';
+import type { LogoStudioConfig, StageSettings, StudioMode } from '../types/studio';
+import { OuterflowMark } from './OuterflowMark';
 
 interface TopBarProps {
   mode: StudioMode;
   onModeChange: (m: StudioMode) => void;
   stage: StageSettings;
   onStageChange: (next: StageSettings) => void;
+  logoConfig: LogoStudioConfig;
   telemetryOpen: boolean;
   onToggleTelemetry: () => void;
   zenMode: boolean;
   onToggleZenMode: () => void;
+  videoRecording: boolean;
+  videoElapsedSec: number;
+  onToggleVideoRecord: () => void;
+  onOpenLogoStudio: () => void;
+  onReplayBootIntro: () => void;
   onResetSim: () => void;
   onSaveScene: () => void;
   onLoadScene: (file: File) => void;
@@ -32,6 +40,8 @@ interface TopBarProps {
   onExportSTL: () => void;
   onExportOBJ: () => void;
   onCapturePNG: () => void;
+  onCaptureTransparentPNG: () => void;
+  onPrintSheet: () => void;
 }
 
 const MODES: { id: StudioMode; label: string; icon: React.ReactNode }[] = [
@@ -47,10 +57,16 @@ export const TopBar: React.FC<TopBarProps> = ({
   onModeChange,
   stage,
   onStageChange,
+  logoConfig,
   telemetryOpen,
   onToggleTelemetry,
   zenMode,
   onToggleZenMode,
+  videoRecording,
+  videoElapsedSec,
+  onToggleVideoRecord,
+  onOpenLogoStudio,
+  onReplayBootIntro,
   onResetSim,
   onSaveScene,
   onLoadScene,
@@ -58,6 +74,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   onExportSTL,
   onExportOBJ,
   onCapturePNG,
+  onCaptureTransparentPNG,
+  onPrintSheet,
 }) => {
   const [exportOpen, setExportOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -65,13 +83,20 @@ export const TopBar: React.FC<TopBarProps> = ({
   return (
     <header className="topbar">
       <div className="topbar-left">
-        <div className="brand-chip">
-          <div className="brand-mark">
-            <Cpu size={14} />
-          </div>
+        <button
+          type="button"
+          className="brand-chip-btn"
+          onClick={onOpenLogoStudio}
+          title="Open 3D Logo & Motion Studio"
+        >
+          <OuterflowMark
+            size={21}
+            primaryColor={logoConfig.primaryColor}
+            secondaryColor={logoConfig.secondaryColor}
+          />
           <span className="brand-name">OUTERFLOW</span>
           <span className="brand-sub">Harboria Labs</span>
-        </div>
+        </button>
 
         <nav className="mode-pills" aria-label="Studio Modes">
           {MODES.map((m) => (
@@ -92,11 +117,30 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button
           type="button"
           className="top-btn"
+          onClick={onReplayBootIntro}
+          title="Replay 3D Fluid Intro"
+        >
+          <Sparkles size={13} />
+          <span>Intro</span>
+        </button>
+
+        <button
+          type="button"
+          className={`top-btn ${videoRecording ? 'rec-active' : ''}`}
+          onClick={onToggleVideoRecord}
+          title="Record 60fps 3D Viewport Video (.webm)"
+        >
+          {videoRecording ? <span className="rec-dot" /> : <Film size={13} />}
+          <span>{videoRecording ? `Stop ${videoElapsedSec}s` : 'Rec Video'}</span>
+        </button>
+
+        <button
+          type="button"
+          className="top-btn"
           onClick={onResetSim}
           title="Reset Active Simulation"
         >
           <RotateCcw size={13} />
-          <span>Reset</span>
         </button>
 
         <button
@@ -115,7 +159,6 @@ export const TopBar: React.FC<TopBarProps> = ({
           title="Toggle Telemetry & Sweep Drawer"
         >
           <Activity size={13} />
-          <span>Telemetry</span>
         </button>
 
         <button
@@ -153,7 +196,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           type="button"
           className="top-btn primary"
           onClick={() => setExportOpen((o) => !o)}
-          title="Save & Export Scene or 3D Mesh"
+          title="Save, Export Media/3D Print & Print Sheet"
         >
           <Download size={13} />
           <span>Export</span>
@@ -169,7 +212,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 setExportOpen(false);
               }}
             >
-              <span>Save Scene JSON</span>
+              <span>Save Project</span>
               <span className="hierarchy-tag">.json</span>
             </button>
             <button
@@ -180,7 +223,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 setExportOpen(false);
               }}
             >
-              <span>Export 3D Scene (GLB)</span>
+              <span>Export 3D Scene</span>
               <span className="hierarchy-tag">.glb</span>
             </button>
             <button
@@ -191,7 +234,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 setExportOpen(false);
               }}
             >
-              <span>Export 3D Mesh (STL)</span>
+              <span>Export 3D Print Mesh</span>
               <span className="hierarchy-tag">.stl</span>
             </button>
             <button
@@ -202,7 +245,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 setExportOpen(false);
               }}
             >
-              <span>Export 3D Mesh (OBJ)</span>
+              <span>Export Wavefront</span>
               <span className="hierarchy-tag">.obj</span>
             </button>
             <button
@@ -213,8 +256,52 @@ export const TopBar: React.FC<TopBarProps> = ({
                 setExportOpen(false);
               }}
             >
-              <span>Capture Snapshot PNG</span>
+              <span>Snapshot Image</span>
               <span className="hierarchy-tag">.png</span>
+            </button>
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={() => {
+                onCaptureTransparentPNG();
+                setExportOpen(false);
+              }}
+            >
+              <span>Transparent Image</span>
+              <span className="hierarchy-tag">.png</span>
+            </button>
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={() => {
+                onToggleVideoRecord();
+                setExportOpen(false);
+              }}
+            >
+              <span>{videoRecording ? 'Stop Video Recording' : 'Record 60fps Video'}</span>
+              <span className="hierarchy-tag">.webm</span>
+            </button>
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={() => {
+                onPrintSheet();
+                setExportOpen(false);
+              }}
+            >
+              <span>Print / Save PDF Sheet</span>
+              <span className="hierarchy-tag">print</span>
+            </button>
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={() => {
+                onOpenLogoStudio();
+                setExportOpen(false);
+              }}
+            >
+              <span>3D Logo &amp; Motion Studio</span>
+              <span className="hierarchy-tag">brand</span>
             </button>
           </div>
         )}

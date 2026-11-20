@@ -296,6 +296,24 @@ export interface StageSettings {
   autoSpin: boolean;
 }
 
+export type LogoVariant = 'morphogenesis' | 'bioGyroid' | 'ferroVortex';
+
+export interface LogoStudioConfig {
+  variant: LogoVariant;
+  title: string;
+  tagline: string;
+  labLabel: string;
+  durationSec: number;
+  fluidity: number;
+  turbulence: number;
+  glowIntensity: number;
+  primaryColor: string;
+  secondaryColor: string;
+  accentColor: string;
+  particleCount: number;
+  showIntroOnLoad: boolean;
+}
+
 export interface ViewportOverlays {
   showGrid: boolean;
   showAxes: boolean;
@@ -316,4 +334,5 @@ export interface OuterflowSceneFile {
   mathConfig: MathConfig;
   softConfig: SoftSimConfig;
   experimentScript: string;
+  logoConfig?: LogoStudioConfig;
 }

@@ -7,6 +7,7 @@ import type {
   CameraPreset,
   CsgOperation,
   GizmoMode,
+  LogoStudioConfig,
   MathConfig,
   MathModeKind,
   OuterflowSceneFile,
@@ -84,6 +85,13 @@ import {
   exportTelemetryCSV,
   parseSceneJSON,
 } from './engines/io/exporters';
+import {
+  CanvasVideoRecorder,
+  downloadBlob,
+  printDesignSheet,
+} from './engines/io/mediaExporters';
+import { loadSavedLogoConfig, saveLogoConfig } from './engines/brand/logoScene';
+import { LogoMotionOverlay } from './components/LogoMotionOverlay';
 import { TopBar } from './components/TopBar';
 import { LeftPanel } from './components/LeftPanel';
 import { RightPanel } from './components/RightPanel';
@@ -118,6 +126,13 @@ export const App: React.FC = () => {
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [telemetryOpen, setTelemetryOpen] = useState(false);
   const [meshStats, setMeshStats] = useState({ vertices: 0, triangles: 0 });
+  const [logoConfig, setLogoConfig] = useState<LogoStudioConfig>(() => loadSavedLogoConfig());
+  const [introOverlayMode, setIntroOverlayMode] = useState<'boot' | 'studio' | null>(() =>
+    loadSavedLogoConfig().showIntroOnLoad ? 'boot' : null
+  );
+  const [videoRecording, setVideoRecording] = useState(false);
+  const [videoElapsedSec, setVideoElapsedSec] = useState(0);
+  const videoRecorderRef = useRef<CanvasVideoRecorder>(new CanvasVideoRecorder());
 
   // Physics State
   const [activePhysicsPresetId, setActivePhysicsPresetId] = useState(initialPreset.id);
@@ -1143,6 +1158,7 @@ export const App: React.FC = () => {
       mathConfig,
       softConfig,
       experimentScript,
+      logoConfig,
     };
     exportSceneJSON(file, 'outerflow-project.outerflow.json');
   };
@@ -1159,9 +1175,58 @@ export const App: React.FC = () => {
     setMathConfig(parsed.mathConfig);
     setSoftConfig(parsed.softConfig);
     setExperimentScript(parsed.experimentScript);
+    if (parsed.logoConfig) setLogoConfig(parsed.logoConfig);
     void syncPhysicsWorldAndViewport(parsed.entities, parsed.joints, parsed.gravity);
     rebuildMathViewport(parsed.mathConfig);
     rebuildSoftViewport(parsed.softConfig);
+  };
+
+  const handleToggleVideoRecord = async () => {
+    const rec = videoRecorderRef.current;
+    if (rec.isRecording) {
+      const blob = await rec.stop();
+      setVideoRecording(false);
+      setVideoElapsedSec(0);
+      downloadBlob(blob, `outerflow-${mode}-recording.webm`);
+      return;
+    }
+    const canvas = viewportRef.current?.renderer.domElement;
+    if (!canvas) return;
+    rec.start(canvas, 60);
+    setVideoElapsedSec(0);
+    setVideoRecording(true);
+  };
+
+  useEffect(() => {
+    if (!videoRecording) return;
+    const id = window.setInterval(() => {
+      setVideoElapsedSec((s) => s + 1);
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [videoRecording]);
+
+  const handlePrintDesignSheet = () => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    vp.render();
+    const imageDataUrl = vp.renderer.domElement.toDataURL('image/png');
+    const activeStats = mode === 'math' ? mathStats : meshStats;
+    printDesignSheet({
+      title: `Outerflow Studio — ${mode.toUpperCase()} Snapshot`,
+      subtitle: logoConfig.tagline,
+      imageDataUrl,
+      metadata: [
+        ['Organization', logoConfig.labLabel],
+        ['Active Mode', mode],
+        ['Vertices / Triangles', `${activeStats.vertices.toLocaleString()} / ${activeStats.triangles.toLocaleString()}`],
+        ['Simulation Time', `${simTime.toFixed(2)} s`],
+        ['Gravity', `${gravity[1].toFixed(2)} m/s²`],
+        ['Rigid Bodies / CAD Parts', `${entities.length} / ${cadParts.length}`],
+      ],
+      notes: latestTelemetry
+        ? `Latest Energy Readout — KE: ${latestTelemetry.kineticEnergy.toFixed(2)} J, PE: ${latestTelemetry.potentialEnergy.toFixed(2)} J, Total: ${latestTelemetry.totalEnergy.toFixed(2)} J.`
+        : 'Generated from Outerflow Studio (Harboria Labs).',
+    });
   };
 
   const zenMode = leftCollapsed && rightCollapsed;
@@ -1192,10 +1257,16 @@ export const App: React.FC = () => {
         onModeChange={handleModeChange}
         stage={stage}
         onStageChange={setStage}
+        logoConfig={logoConfig}
         telemetryOpen={telemetryOpen}
         onToggleTelemetry={() => setTelemetryOpen((o) => !o)}
         zenMode={zenMode}
         onToggleZenMode={handleToggleZenMode}
+        videoRecording={videoRecording}
+        videoElapsedSec={videoElapsedSec}
+        onToggleVideoRecord={() => void handleToggleVideoRecord()}
+        onOpenLogoStudio={() => setIntroOverlayMode('studio')}
+        onReplayBootIntro={() => setIntroOverlayMode('boot')}
         onResetSim={handleReset}
         onSaveScene={handleSaveScene}
         onLoadScene={handleLoadScene}
@@ -1215,6 +1286,10 @@ export const App: React.FC = () => {
           const canvas = viewportRef.current?.renderer.domElement;
           if (canvas) capturePNG(canvas, `outerflow-${mode}.png`);
         }}
+        onCaptureTransparentPNG={() => {
+          viewportRef.current?.captureTransparentPNG(`outerflow-${mode}-transparent.png`);
+        }}
+        onPrintSheet={handlePrintDesignSheet}
       />
 
       <div className="workspace-body">
@@ -1387,6 +1462,17 @@ export const App: React.FC = () => {
           />
         )}
       </div>
+
+      {introOverlayMode && (
+        <LogoMotionOverlay
+          viewMode={introOverlayMode}
+          config={logoConfig}
+          onConfigChange={setLogoConfig}
+          onSaveDefault={(cfg) => saveLogoConfig(cfg)}
+          onFinish={() => setIntroOverlayMode(null)}
+          onReplayBoot={() => setIntroOverlayMode('boot')}
+        />
+      )}
     </div>
   );
 };
