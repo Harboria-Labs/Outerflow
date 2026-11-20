@@ -59,6 +59,7 @@ import {
   type WorkbenchConfig,
   type WorkbenchWire,
 } from '../engines/electronics/workbench3D';
+import { UNIVERSAL_SCRIPT_TEMPLATES } from '../engines/project/universalScriptEngine';
 import {
   AccordionSection,
   SegmentedControl,
@@ -150,10 +151,11 @@ interface RightPanelProps {
   onUpdateSoftConfig: (next: SoftSimConfig) => void;
   onTriggerFluidSlosh: () => void;
   onTriggerWaveDrop: () => void;
-  // Experiments
+  // Experiments & Universal Script
   experimentScript: string;
   onExperimentScriptChange: (code: string) => void;
   onRunExperimentScript: () => void;
+  onOpenScriptConsole?: () => void;
   scriptLogs: string[];
   scriptError: string | null;
   sweepConfig: SweepConfig;
@@ -283,6 +285,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   experimentScript,
   onExperimentScriptChange,
   onRunExperimentScript,
+  onOpenScriptConsole,
   scriptLogs,
   scriptError,
   sweepConfig,
@@ -549,6 +552,65 @@ export const RightPanel: React.FC<RightPanelProps> = ({
                 <span className="field-label">
                   Tweak parameters above, then capture Design A vs. Design B side-by-side.
                 </span>
+              )}
+            </AccordionSection>
+
+            <AccordionSection title="Programmable Engineering Script" defaultOpen>
+              <div className="field-col">
+                <span className="field-label">Engineering Script Template</span>
+                <select
+                  className="input-select"
+                  defaultValue={UNIVERSAL_SCRIPT_TEMPLATES[0].id}
+                  onChange={(e) => {
+                    const all = [...UNIVERSAL_SCRIPT_TEMPLATES, ...SCRIPT_TEMPLATES];
+                    const t = all.find((s) => s.id === e.target.value);
+                    if (t) onExperimentScriptChange(t.code);
+                  }}
+                >
+                  {UNIVERSAL_SCRIPT_TEMPLATES.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      ★ {t.name}
+                    </option>
+                  ))}
+                  {SCRIPT_TEMPLATES.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <textarea
+                className="input-code"
+                style={{ minHeight: 115 }}
+                spellCheck={false}
+                value={experimentScript}
+                onChange={(e) => onExperimentScriptChange(e.target.value)}
+              />
+              <div style={{ display: 'flex', gap: 5 }}>
+                <button
+                  type="button"
+                  className="action-btn primary"
+                  style={{ flex: 1 }}
+                  onClick={onRunExperimentScript}
+                >
+                  <Play size={12} />
+                  <span>Build &amp; Run Script</span>
+                </button>
+                {onOpenScriptConsole && (
+                  <button
+                    type="button"
+                    className="action-btn"
+                    onClick={onOpenScriptConsole}
+                    title="Expand Bottom Script IDE Console"
+                  >
+                    <Code2 size={12} />
+                    <span>Full IDE</span>
+                  </button>
+                )}
+              </div>
+              {scriptError && <div className="error-banner">{scriptError}</div>}
+              {scriptLogs.length > 0 && (
+                <div className="console-box">{scriptLogs.join('\n')}</div>
               )}
             </AccordionSection>
 
@@ -2611,11 +2673,17 @@ export const RightPanel: React.FC<RightPanelProps> = ({
                   <select
                     className="input-select"
                     onChange={(e) => {
-                      const t = SCRIPT_TEMPLATES.find((s) => s.id === e.target.value);
+                      const all = [...UNIVERSAL_SCRIPT_TEMPLATES, ...SCRIPT_TEMPLATES];
+                      const t = all.find((s) => s.id === e.target.value);
                       if (t) onExperimentScriptChange(t.code);
                     }}
-                    defaultValue={SCRIPT_TEMPLATES[0].id}
+                    defaultValue={UNIVERSAL_SCRIPT_TEMPLATES[0].id}
                   >
+                    {UNIVERSAL_SCRIPT_TEMPLATES.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        ★ {t.name}
+                      </option>
+                    ))}
                     {SCRIPT_TEMPLATES.map((t) => (
                       <option key={t.id} value={t.id}>
                         {t.name}
@@ -2631,10 +2699,28 @@ export const RightPanel: React.FC<RightPanelProps> = ({
                   onChange={(e) => onExperimentScriptChange(e.target.value)}
                 />
 
-                <button type="button" className="action-btn primary" onClick={onRunExperimentScript}>
-                  <Play size={13} />
-                  <span>Execute &amp; Simulate Script</span>
-                </button>
+                <div style={{ display: 'flex', gap: 5 }}>
+                  <button
+                    type="button"
+                    className="action-btn primary"
+                    style={{ flex: 1 }}
+                    onClick={onRunExperimentScript}
+                  >
+                    <Play size={13} />
+                    <span>Build &amp; Run Script</span>
+                  </button>
+                  {onOpenScriptConsole && (
+                    <button
+                      type="button"
+                      className="action-btn"
+                      onClick={onOpenScriptConsole}
+                      title="Expand Bottom Script IDE Console"
+                    >
+                      <Code2 size={12} />
+                      <span>Full IDE</span>
+                    </button>
+                  )}
+                </div>
 
                 {scriptError && <div className="error-banner">{scriptError}</div>}
                 {scriptLogs.length > 0 && (

@@ -234,6 +234,7 @@ export interface StepRuntimeApi {
   ) => { pos: Vec3; vel: Vec3; mass: number } | null;
   applyImpulse: (entityId: string, impulse: Vec3) => void;
   applyForce: (entityId: string, force: Vec3) => void;
+  setMotor?: (jointId: string, speed: number, maxForce?: number) => void;
   logMetric: (name: string, value: number) => void;
 }
 

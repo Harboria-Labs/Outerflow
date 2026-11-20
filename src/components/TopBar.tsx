@@ -4,6 +4,7 @@ import {
   Atom,
   Box,
   CheckCircle2,
+  Code2,
   Cpu,
   Download,
   Film,
@@ -31,6 +32,8 @@ interface TopBarProps {
   logoConfig: LogoStudioConfig;
   telemetryOpen: boolean;
   onToggleTelemetry: () => void;
+  scriptOpen?: boolean;
+  onToggleScript?: () => void;
   zenMode: boolean;
   onToggleZenMode: () => void;
   canUndo?: boolean;
@@ -72,6 +75,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   logoConfig,
   telemetryOpen,
   onToggleTelemetry,
+  scriptOpen = false,
+  onToggleScript,
   zenMode,
   onToggleZenMode,
   canUndo = false,
@@ -207,6 +212,18 @@ export const TopBar: React.FC<TopBarProps> = ({
         >
           <Grid3x3 size={13} />
         </button>
+
+        {onToggleScript && (
+          <button
+            type="button"
+            className={`top-btn ${scriptOpen ? 'active' : ''}`}
+            onClick={onToggleScript}
+            title="Open Programmable Engineering Script IDE (CAD, Physics, Robotics & Workbench)"
+          >
+            <Code2 size={13} />
+            <span className="hide-sm">Script IDE</span>
+          </button>
+        )}
 
         <button
           type="button"

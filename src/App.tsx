@@ -107,11 +107,11 @@ import {
 } from './engines/soft/particleFieldEngine';
 import { ClothSolver } from './engines/soft/clothSolver';
 import { SphFluidSolver, WaveTankSolver } from './engines/soft/fluidSolver';
+import { type StepRuntimeApi } from './engines/experiments/scriptRunner';
 import {
-  SCRIPT_TEMPLATES,
-  executeExperimentScript,
-  type StepRuntimeApi,
-} from './engines/experiments/scriptRunner';
+  UNIVERSAL_SCRIPT_TEMPLATES,
+  executeUniversalScript,
+} from './engines/project/universalScriptEngine';
 import { SWEEP_TEMPLATES, runParameterSweep } from './engines/experiments/sweepRunner';
 import {
   capturePNG,
@@ -143,6 +143,7 @@ import { RightPanel } from './components/RightPanel';
 import { ViewportHUD } from './components/ViewportHUD';
 import { TransportBar } from './components/TransportBar';
 import { TelemetryDrawer } from './components/TelemetryDrawer';
+import { ScriptConsoleDrawer } from './components/ScriptConsoleDrawer';
 import { ElectronicsSchematicView } from './components/ElectronicsSchematicView';
 
 function createInitialMathConfig(): MathConfig {
@@ -207,6 +208,7 @@ export const App: React.FC = () => {
     typeof window !== 'undefined' ? window.innerWidth < 1024 : false
   );
   const [telemetryOpen, setTelemetryOpen] = useState(false);
+  const [scriptConsoleOpen, setScriptConsoleOpen] = useState(false);
   const [meshStats, setMeshStats] = useState({ vertices: 0, triangles: 0 });
   const [logoConfig, setLogoConfig] = useState<LogoStudioConfig>(() => loadSavedLogoConfig());
   const [introOverlayMode, setIntroOverlayMode] = useState<'boot' | 'studio' | null>(() =>
@@ -288,8 +290,10 @@ export const App: React.FC = () => {
   // Soft / Fields State
   const [softConfig, setSoftConfig] = useState<SoftSimConfig>(() => createDefaultSoftConfig());
 
-  // Experiments State
-  const [experimentScript, setExperimentScript] = useState<string>(SCRIPT_TEMPLATES[0].code);
+  // Experiments & Programmable Engineering Script State
+  const [experimentScript, setExperimentScript] = useState<string>(
+    UNIVERSAL_SCRIPT_TEMPLATES[0].code
+  );
   const [scriptLogs, setScriptLogs] = useState<string[]>([]);
   const [scriptError, setScriptError] = useState<string | null>(null);
   const [sweepConfig, setSweepConfig] = useState<SweepConfig>({
@@ -735,6 +739,8 @@ export const App: React.FC = () => {
                   };
                 },
                 applyImpulse: (eid, imp) => engine.applyImpulse(eid, imp),
+                setMotor: (jid, spd, maxForce = 25) =>
+                  engine.updateJointMotor(jid, spd, maxForce),
                 applyForce: (eid, f) => {
                   const b = engine.getBody(eid);
                   if (b && b.isDynamic()) {
@@ -1972,22 +1978,46 @@ export const App: React.FC = () => {
     }
   };
 
-  // Experiments actions
-  const handleRunExperimentScript = () => {
-    const res = executeExperimentScript(experimentScript);
+  // Programmable Engineering & Experiments script execution
+  const handleRunExperimentScript = (codeOverride?: string) => {
+    const codeToRun = typeof codeOverride === 'string' ? codeOverride : experimentScript;
+    const res = executeUniversalScript(codeToRun, {
+      entities,
+      joints,
+      cadParts,
+      parameters,
+      workbenchConfig,
+      gravity,
+    });
     setScriptLogs(res.logs);
     setScriptError(res.ok ? null : res.error ?? 'Unknown script error');
     if (!res.ok) return;
 
+    pushHistorySnapshot(true);
     scriptStepCallbackRef.current = res.stepCallback;
     customMetricsRef.current = {};
-    setGravity(res.gravity);
-    setEntities(res.entities);
-    setJoints(res.joints);
-    setSelectedId(res.entities[res.entities.length - 1]?.id ?? null);
-    void syncPhysicsWorldAndViewport(res.entities, res.joints, res.gravity).then(() => {
-      setRunning(true);
-    });
+
+    if (res.touchedCad) {
+      setCadParts(res.cadParts);
+    }
+    if (res.touchedWorkbench && res.workbenchConfig) {
+      setWorkbenchConfig(res.workbenchConfig);
+      setElectronicsSubMode('workbench');
+    }
+    if (res.touchedPhysics) {
+      const evalRes = evaluateProjectParameters(res.parameters, res.entities, res.joints);
+      setGravity(res.gravity);
+      setParameters(evalRes.parameters);
+      setEntities(evalRes.entities);
+      setJoints(evalRes.joints);
+      setSelectedId(evalRes.entities[evalRes.entities.length - 1]?.id ?? null);
+      void syncPhysicsWorldAndViewport(evalRes.entities, evalRes.joints, res.gravity).then(() => {
+        setRunning(true);
+      });
+    }
+    if (res.targetMode && (mode !== 'experiments' || res.targetMode !== 'physics')) {
+      setMode(res.targetMode);
+    }
   };
 
   const handleRunSweep = async () => {
@@ -2200,6 +2230,8 @@ export const App: React.FC = () => {
         logoConfig={logoConfig}
         telemetryOpen={telemetryOpen}
         onToggleTelemetry={() => setTelemetryOpen((o) => !o)}
+        scriptOpen={scriptConsoleOpen}
+        onToggleScript={() => setScriptConsoleOpen((o) => !o)}
         zenMode={zenMode}
         onToggleZenMode={handleToggleZenMode}
         canUndo={undoStack.length > 0}
@@ -2385,6 +2417,20 @@ export const App: React.FC = () => {
             />
           </div>
 
+          <ScriptConsoleDrawer
+            open={scriptConsoleOpen}
+            onClose={() => setScriptConsoleOpen(false)}
+            code={experimentScript}
+            onCodeChange={setExperimentScript}
+            onRun={(codeOverride) => handleRunExperimentScript(codeOverride)}
+            logs={scriptLogs}
+            error={scriptError}
+            onClearLogs={() => {
+              setScriptLogs([]);
+              setScriptError(null);
+            }}
+          />
+
           <TelemetryDrawer
             open={telemetryOpen}
             onClose={() => setTelemetryOpen(false)}
@@ -2487,9 +2533,10 @@ export const App: React.FC = () => {
             }
             experimentScript={experimentScript}
             onExperimentScriptChange={setExperimentScript}
-            onRunExperimentScript={handleRunExperimentScript}
+            onRunExperimentScript={() => handleRunExperimentScript()}
             scriptLogs={scriptLogs}
             scriptError={scriptError}
+            onOpenScriptConsole={() => setScriptConsoleOpen(true)}
             sweepConfig={sweepConfig}
             onSweepConfigChange={setSweepConfig}
             onRunSweep={handleRunSweep}
