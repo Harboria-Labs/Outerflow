@@ -1510,7 +1510,7 @@ body,
   overflow: hidden;
 }
 
-/* Draggable & Shrinkable Viewport Tool Pill */
+/* Draggable & Shrinkable Viewport Tool Pill (Icon-Only Stack) */
 .tool-dock-pill {
   position: absolute;
   z-index: 25;
@@ -1524,6 +1524,7 @@ body,
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   display: flex;
   flex-direction: column;
+  align-items: center;
   transition: border-color 0.15s ease;
 }
 
@@ -1538,8 +1539,9 @@ body,
 .tool-dock-active {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
+  justify-content: center;
+  gap: 3px;
+  padding: 6px 7px;
   font-size: 11.5px;
   font-weight: 600;
   color: var(--text-primary);
@@ -1548,20 +1550,28 @@ body,
 
 .tool-dock-drawer {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: center;
   gap: 4px;
-  padding: 6px;
+  padding: 5px;
   border-top: 1px solid var(--glass-border);
-  max-width: 240px;
 }
 
-/* Ghost-Transparent Hover-Reveal Camera View Bar */
+.hud-btn.icon-only-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 6px;
+}
+
+/* Vertical Ghost-Transparent Hover-Reveal Camera View Stack */
 .ghost-camera-bar {
   position: absolute;
-  top: 14px;
-  right: 14px;
+  top: 54px;
+  right: 12px;
   z-index: 12;
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 3px;
   padding: 4px;
@@ -1569,8 +1579,15 @@ body,
   background: var(--glass-bg);
   backdrop-filter: blur(12px);
   border: 1px solid var(--glass-border);
-  opacity: 0.16;
+  opacity: 0.24;
   transition: opacity 0.2s ease, border-color 0.2s ease;
+}
+
+.camera-v-sep {
+  width: 14px;
+  height: 1px;
+  background: var(--glass-border);
+  margin: 2px 0;
 }
 
 .ghost-camera-bar:hover,
@@ -1583,6 +1600,268 @@ body,
   .ghost-camera-bar {
     opacity: 0.52;
   }
+}
+
+/* Camera-Style Circle + Red Dot Video Record Indicator */
+.cam-rec-ring {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1.5px solid #cbd5e1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.14s ease;
+}
+
+.cam-rec-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ef4444;
+  transition: transform 0.14s ease, border-radius 0.14s ease;
+}
+
+.cam-rec-ring.active {
+  border-color: #fb7185;
+}
+
+.cam-rec-ring.active .cam-rec-dot {
+  animation: pulseRec 1s infinite ease-in-out;
+}
+
+/* Collapsible Slim Left Dock Rail */
+.side-panel.collapsed-rail {
+  width: 38px;
+  min-width: 38px;
+  align-items: center;
+  padding: 8px 0;
+  gap: 8px;
+}
+
+.rail-expand-btn,
+.rail-icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.rail-expand-btn:hover,
+.rail-icon-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+  background: var(--bg-surface-hover);
+}
+
+.rail-icon-btn.active {
+  border-color: var(--accent);
+  color: #93c5fd;
+  background: var(--accent-soft);
+}
+
+/* Top Header Stack, Project Filename & Normal Long Horizontal Tools Bar */
+.topbar-stack {
+  display: flex;
+  flex-direction: column;
+  z-index: 35;
+}
+
+.header-file-sep {
+  color: rgba(148, 163, 184, 0.35);
+  margin: 0 4px;
+  font-size: 13px;
+}
+
+.project-filename-btn,
+.project-filename-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.03);
+  color: #e2e8f0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  max-width: 195px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-filename-btn:hover {
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.project-filename-input {
+  width: 185px;
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg-input);
+}
+
+.page-tools-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.page-tools-trigger:hover,
+.page-tools-trigger.active {
+  color: #ffffff;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Normal Long Horizontal Engineering Toolbar (Flat Strip Below Header) */
+.horizontal-tools-bar {
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 14px;
+  background: rgba(14, 16, 22, 0.96);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.horizontal-tools-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.hbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.hbar-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.hbar-btn.active {
+  color: #93c5fd;
+  background: var(--accent-soft);
+  border-color: rgba(38, 128, 235, 0.45);
+}
+
+.hbar-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+.submenu-list {
+  display: flex;
+  flex-direction: column;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+  margin: 2px 0 4px 8px;
+  gap: 2px;
+}
+
+.dropdown-item.sub {
+  font-size: 11px;
+  padding: 4px 7px;
+}
+
+/* Hide less-important HUD elements automatically when sidebars open to prevent any overlap */
+.studio-shell.left-open .hide-when-sidebars,
+.studio-shell.right-open .hide-when-sidebars {
+  display: none !important;
+}
+
+.studio-shell.both-open .hide-when-both-open {
+  display: none !important;
+}
+
+@media (max-width: 1280px) {
+  .studio-shell.both-open .bottom-left-sim-readout {
+    display: none !important;
+  }
+}
+
+.ribbon-icon-btn.active {
+  color: #93c5fd;
+  background: rgba(38, 128, 235, 0.24);
+  border-color: rgba(56, 189, 248, 0.5);
+}
+
+/* Compact Colored Bottom-Left Simulation Readout Strip (Same Row Before Bottom Dynamic Island) */
+.bottom-left-sim-readout {
+  position: absolute;
+  bottom: 14px;
+  left: 12px;
+  z-index: 20;
+  height: 34px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(11, 13, 19, 0.86);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: border-color 0.14s ease;
+}
+
+.bottom-left-sim-readout:hover {
+  border-color: rgba(56, 189, 248, 0.45);
+}
+
+.sim-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.sim-chip-tag {
+  font-size: 9px;
+  color: #64748b;
+  font-weight: 600;
 }
 
 /* Parts Library Category Pills & 2D Blueprint Container */

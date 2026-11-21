@@ -287,12 +287,55 @@ export class StudioViewport {
     }
   };
 
-  private handlePointerMove = (e: PointerEvent) => {
-    if (!this.isSculpting) return;
-    const hit = this.raycastMeshGroup(e);
-    if (hit) {
-      this.callbacks.onSculptMove?.(hit.point, hit.normal);
+  private findUserDataId(obj: THREE.Object3D | null): string | null {
+    let curr: THREE.Object3D | null = obj;
+    while (curr) {
+      const ud = curr.userData as {
+        id?: string;
+        compId?: string;
+        instanceId?: string;
+      };
+      if (ud?.compId) return ud.compId;
+      if (ud?.instanceId) return ud.instanceId;
+      if (ud?.id) return ud.id;
+      curr = curr.parent;
     }
+    return null;
+  }
+
+  private getInteractiveTargets(): { objects: THREE.Object3D[]; recursive: boolean } {
+    if (this.activeMode === 'cad') {
+      return { objects: Array.from(this.cadMeshes.values()), recursive: true };
+    }
+    if (this.activeMode === 'physics' || this.activeMode === 'experiments') {
+      return { objects: Array.from(this.entityMeshes.values()), recursive: true };
+    }
+    if (this.activeMode === 'electronics') {
+      return { objects: this.electronicsGroup.children, recursive: true };
+    }
+    return { objects: [], recursive: false };
+  }
+
+  private handlePointerMove = (e: PointerEvent) => {
+    if (this.isSculpting) {
+      const hit = this.raycastMeshGroup(e);
+      if (hit) {
+        this.callbacks.onSculptMove?.(hit.point, hit.normal);
+      }
+      return;
+    }
+    if (this.isDraggingGizmo) return;
+    const { objects, recursive } = this.getInteractiveTargets();
+    if (objects.length === 0) {
+      this.renderer.domElement.style.cursor = 'grab';
+      return;
+    }
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    this.ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.ndc, this.camera);
+    const hits = this.raycaster.intersectObjects(objects, recursive);
+    this.renderer.domElement.style.cursor = hits.length > 0 ? 'pointer' : 'grab';
   };
 
   private handlePointerUp = (e: PointerEvent) => {
@@ -311,18 +354,12 @@ export class StudioViewport {
     this.ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(this.ndc, this.camera);
 
-    const targets: THREE.Object3D[] =
-      this.activeMode === 'cad'
-        ? Array.from(this.cadMeshes.values())
-        : this.activeMode === 'physics' || this.activeMode === 'experiments'
-        ? Array.from(this.entityMeshes.values())
-        : [];
-
-    if (targets.length === 0) return;
-    const hits = this.raycaster.intersectObjects(targets, false);
+    const { objects, recursive } = this.getInteractiveTargets();
+    if (objects.length === 0) return;
+    const hits = this.raycaster.intersectObjects(objects, recursive);
     if (hits.length > 0) {
-      const id = hits[0].object.userData.id as string | undefined;
-      this.callbacks.onSelectObject?.(id ?? null);
+      const id = this.findUserDataId(hits[0].object);
+      this.callbacks.onSelectObject?.(id);
     } else {
       this.callbacks.onSelectObject?.(null);
     }

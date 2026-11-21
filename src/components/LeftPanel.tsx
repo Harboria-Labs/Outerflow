@@ -7,6 +7,8 @@ import {
   Eye,
   EyeOff,
   Lock,
+  Pin,
+  PinOff,
   Play,
   Redo2,
   RotateCcw,
@@ -55,7 +57,11 @@ import {
 
 interface LeftPanelProps {
   mode: StudioMode;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
+  onExpand?: () => void;
   onCollapse: () => void;
+  onSpawnHardwareInPhysics?: (meta: LibraryPartMeta) => void;
   stage: StageSettings;
   onStageChange: (next: StageSettings) => void;
   onResetStage: () => void;
@@ -168,13 +174,14 @@ const CIRCUIT_PALETTE: { kind: CircuitComponentKind; label: string }[] = [
 
 export const LeftPanel: React.FC<LeftPanelProps> = ({
   mode,
+  collapsed = false,
+  onToggleCollapse,
+  onExpand,
   onCollapse,
+  onSpawnHardwareInPhysics,
   stage,
   onStageChange,
   onResetStage,
-  physicsPresets,
-  activePhysicsPresetId,
-  onLoadPhysicsPreset,
   entities,
   selectedId,
   onSelect,
@@ -220,8 +227,17 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
 }) => {
   const [partCat, setPartCat] = useState<PartCategory>('robotics');
   const [partQuery, setPartQuery] = useState('');
+  const [partKindFilter, setPartKindFilter] = useState<'all' | 'object' | 'component'>('all');
+  const [leftTab, setLeftTab] = useState<'elements' | 'tree'>('elements');
+  const [pinned, setPinned] = useState(false);
+
+  const isComponentCategory = (cat: PartCategory) =>
+    cat === 'robotics' || cat === 'electronics';
 
   const filteredLibrary = PART_LIBRARY.filter((p) => {
+    if (partKindFilter === 'component' && !isComponentCategory(p.category)) return false;
+    if (partKindFilter === 'object' && isComponentCategory(p.category)) return false;
+
     if (partQuery.trim()) {
       const q = partQuery.toLowerCase();
       return (
@@ -230,55 +246,187 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
         p.category.toLowerCase().includes(q)
       );
     }
+    if (partKindFilter !== 'all') return true;
     return p.category === partCat;
   });
 
-  return (
-    <aside className="side-panel">
-      <div className="panel-header">
-        <div className="panel-header-title">
-          <Box size={14} color="#a1a1aa" />
-          <span>Preview</span>
-        </div>
+  if (collapsed) {
+    return (
+      <aside
+        className="side-panel collapsed-rail"
+        aria-label="Collapsed Elements & Library Dock"
+        onMouseEnter={() => onExpand?.()}
+      >
         <button
           type="button"
-          className="mini-icon-btn"
-          onClick={onCollapse}
-          title="Collapse Left Panel"
+          className="rail-expand-btn"
+          onClick={() => (onToggleCollapse ? onToggleCollapse() : onExpand?.())}
+          title="Hover or click to expand Elements & Scene Tree"
         >
-          <ChevronsLeft size={15} />
+          <Box size={14} color="#38bdf8" />
         </button>
+        <button
+          type="button"
+          className={`rail-icon-btn ${leftTab === 'elements' ? 'active' : ''}`}
+          onMouseEnter={() => {
+            setLeftTab('elements');
+            onExpand?.();
+          }}
+          title="Elements, 3D Objects & Components Library"
+        >
+          <span style={{ fontSize: 12, fontWeight: 700 }}>+</span>
+        </button>
+        <button
+          type="button"
+          className={`rail-icon-btn ${leftTab === 'tree' ? 'active' : ''}`}
+          onMouseEnter={() => {
+            setLeftTab('tree');
+            onExpand?.();
+          }}
+          title="Project Scene Tree & Stage Settings"
+        >
+          <Eye size={13} />
+        </button>
+      </aside>
+    );
+  }
+
+  return (
+    <aside
+      className="side-panel"
+      onMouseLeave={() => {
+        if (!pinned) onCollapse();
+      }}
+    >
+      <div className="panel-header">
+        <div className="panel-header-title">
+          <Box size={14} color="#38bdf8" />
+          <span>Elements &amp; Tree</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+          <button
+            type="button"
+            className={`mini-icon-btn ${pinned ? 'active' : ''}`}
+            onClick={() => setPinned((p) => !p)}
+            title={pinned ? 'Unpin Sidebar (Auto-collapse on hover out)' : 'Pin Sidebar Open'}
+          >
+            {pinned ? <Pin size={13} color="#38bdf8" /> : <PinOff size={13} />}
+          </button>
+          <button
+            type="button"
+            className="mini-icon-btn"
+            onClick={() => {
+              setPinned(false);
+              onCollapse();
+            }}
+            title="Collapse Left Sidebar"
+          >
+            <ChevronsLeft size={15} />
+          </button>
+        </div>
+      </div>
+
+      {/* Clean 2-Tab Separation: Elements & Objects/Components | Scene Tree (Templates live in ⋯ menu) */}
+      <div style={{ padding: '6px 10px', borderBottom: '1px solid var(--border)' }}>
+        <SegmentedControl
+          value={leftTab}
+          columns={2}
+          options={[
+            { value: 'elements', label: 'Elements & Library' },
+            { value: 'tree', label: 'Scene Tree' },
+          ]}
+          onChange={setLeftTab}
+        />
       </div>
 
       <div className="panel-scroll">
-        {(mode === 'physics' || mode === 'experiments') && (
-          <AccordionSection title="Playable Mechanisms & Templates" defaultOpen>
-            <div className="compact-grid">
-              {physicsPresets.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  className={`compact-btn ${activePhysicsPresetId === p.id ? 'active' : ''}`}
-                  onClick={() => onLoadPhysicsPreset(p.id)}
-                  title={p.description}
-                >
-                  <span>{p.name}</span>
-                </button>
-              ))}
-            </div>
-            <div className="compact-grid" style={{ marginTop: 4 }}>
-              {PHYSICS_SHAPES.map((s) => (
-                <button
-                  key={s.shape}
-                  type="button"
-                  className="compact-btn"
-                  onClick={() => onAddPhysicsEntity(s.shape)}
-                >
-                  <span>{s.label}</span>
-                </button>
-              ))}
-            </div>
-          </AccordionSection>
+        {leftTab === 'elements' && (mode === 'physics' || mode === 'experiments') && (
+          <>
+            <AccordionSection title="Spawn Physics Primitives" defaultOpen>
+              <div className="compact-grid">
+                {PHYSICS_SHAPES.map((s) => (
+                  <button
+                    key={s.shape}
+                    type="button"
+                    className="compact-btn"
+                    onClick={() => onAddPhysicsEntity(s.shape)}
+                    title={`Import ${s.label} rigid body into active scene`}
+                  >
+                    <span>{s.label}</span>
+                  </button>
+                ))}
+              </div>
+            </AccordionSection>
+
+            <AccordionSection title="3D Objects & Components (46)" defaultOpen>
+              <input
+                className="input-text"
+                placeholder="Search Arduino, ESP32, gears, limbs..."
+                value={partQuery}
+                onChange={(e) => setPartQuery(e.target.value)}
+              />
+
+              {/* Object vs Component Filter */}
+              <div className="cat-pill-row">
+                {(
+                  [
+                    { id: 'all', label: 'All' },
+                    { id: 'object', label: 'Objects' },
+                    { id: 'component', label: 'Components' },
+                  ] as const
+                ).map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    className={`cat-pill ${partKindFilter === f.id ? 'active' : ''}`}
+                    onClick={() => setPartKindFilter(f.id)}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+
+              {!partQuery.trim() && partKindFilter === 'all' && (
+                <div className="cat-pill-row">
+                  {PART_CATEGORIES.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={`cat-pill ${partCat === c.id ? 'active' : ''}`}
+                      onClick={() => setPartCat(c.id)}
+                    >
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="hierarchy-list" style={{ maxHeight: 230, overflowY: 'auto' }}>
+                {filteredLibrary.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className="compact-btn"
+                    onClick={() =>
+                      onSpawnHardwareInPhysics
+                        ? onSpawnHardwareInPhysics(item)
+                        : onAddLibraryPart(item)
+                    }
+                    title={`Import ${item.name} directly into scene — ${item.description}`}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+                      <span className="color-dot" style={{ background: item.defaultColor }} />
+                      <span>+ {item.name}</span>
+                      <span className="hierarchy-tag" style={{ marginLeft: 'auto' }}>
+                        {isComponentCategory(item.category) ? 'comp' : 'obj'}
+                      </span>
+                    </div>
+                    <span className="compact-btn-sub">{item.description}</span>
+                  </button>
+                ))}
+              </div>
+            </AccordionSection>
+          </>
         )}
 
         {mode === 'cad' && (
@@ -754,7 +902,7 @@ export const LeftPanel: React.FC<LeftPanelProps> = ({
         </AccordionSection>
 
         {/* Unified Project Scene Tree & Checkpoints */}
-        {(mode === 'physics' || mode === 'experiments') && (
+        {(mode === 'physics' || mode === 'experiments') && leftTab === 'tree' && (
           <>
             <AccordionSection
               title={`Unified Project Scene Tree (${entities.length + cadParts.length})`}

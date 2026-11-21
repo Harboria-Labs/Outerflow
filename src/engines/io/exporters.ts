@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import JSZip from 'jszip';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js';
@@ -60,15 +61,22 @@ export function capturePNG(canvas: HTMLCanvasElement, filename = 'outerflow-snap
   }, 'image/png');
 }
 
-export function exportSceneJSON(scene: OuterflowSceneFile, filename = 'scene.outerflow.json'): void {
+export function exportSceneJSON(
+  scene: OuterflowSceneFile,
+  filename = 'outerflow-project.lifeforms'
+): void {
   const text = JSON.stringify(scene, null, 2);
   triggerDownload(new Blob([text], { type: 'application/json' }), filename);
 }
 
 export function parseSceneJSON(text: string): OuterflowSceneFile {
   const parsed = JSON.parse(text) as OuterflowSceneFile;
-  if (!parsed || parsed.format !== 'outerflow-scene') {
-    throw new Error('Invalid Outerflow scene file format');
+  if (
+    !parsed ||
+    (parsed.format !== 'outerflow-scene' &&
+      (parsed as unknown as { format?: string }).format !== 'outerflow-lifeforms')
+  ) {
+    throw new Error('Invalid Outerflow .lifeforms file format');
   }
   return parsed;
 }
@@ -134,4 +142,97 @@ export function exportSweepCSV(results: SweepTrialResult[], filename = 'outerflo
     );
   }
   triggerDownload(new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' }), filename);
+}
+
+/**
+ * Bundles the full Outerflow project (.lifeforms), engineering script, telemetry CSV,
+ * sweep CSV, and 3D OBJ mesh into a downloadable .zip archive.
+ */
+export async function exportProjectAsZip(opts: {
+  projectName: string;
+  scene: OuterflowSceneFile;
+  rootObject?: THREE.Object3D | null;
+  telemetrySamples?: TelemetrySample[];
+  sweepResults?: SweepTrialResult[];
+  scriptCode?: string;
+}): Promise<void> {
+  const zip = new JSZip();
+  const baseName =
+    opts.projectName
+      .replace(/\.lifeforms$/i, '')
+      .replace(/[^a-zA-Z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'outerflow-project';
+
+  zip.file(`${baseName}.lifeforms`, JSON.stringify(opts.scene, null, 2));
+
+  if (opts.scriptCode && opts.scriptCode.trim()) {
+    zip.file(`${baseName}-script.txt`, opts.scriptCode);
+  }
+  if (opts.telemetrySamples && opts.telemetrySamples.length > 0) {
+    zip.file(`${baseName}-telemetry.csv`, formatTelemetryCSV(opts.telemetrySamples));
+  }
+  if (opts.sweepResults && opts.sweepResults.length > 0) {
+    const r0 = opts.sweepResults[0];
+    const headers = [
+      'trialIndex',
+      r0.paramName,
+      r0.primaryMetricName,
+      r0.secondaryMetricName,
+      'peakHeight',
+      'finalEnergy',
+    ];
+    const rows = [
+      headers.join(','),
+      ...opts.sweepResults.map((r) =>
+        [
+          r.trialIndex,
+          r.paramValue,
+          r.primaryMetricValue,
+          r.secondaryMetricValue,
+          r.peakHeight,
+          r.finalEnergy,
+        ].join(',')
+      ),
+    ];
+    zip.file(`${baseName}-sweep.csv`, rows.join('\n'));
+  }
+  if (opts.rootObject) {
+    try {
+      const objText = new OBJExporter().parse(opts.rootObject);
+      zip.file(`${baseName}.obj`, objText);
+    } catch {
+      // Skip OBJ if active scene has no exportable meshes
+    }
+  }
+
+  zip.file(
+    'README.txt',
+    `Outerflow Studio Project Archive — Harboria Labs\nProject: ${baseName}.lifeforms\nSaved At: ${opts.scene.savedAt}\nMode: ${opts.scene.mode}\nEntities: ${opts.scene.entities.length}\nCAD Parts: ${opts.scene.cadParts.length}\n`
+  );
+
+  const blob = await zip.generateAsync({ type: 'blob' });
+  triggerDownload(blob, `${baseName}.zip`);
+}
+
+/**
+ * Extracts and parses a .lifeforms / .json project from an imported .zip archive.
+ */
+export async function importProjectFromZip(
+  file: File
+): Promise<{ scene: OuterflowSceneFile; fileName: string }> {
+  const zip = await JSZip.loadAsync(file);
+  const candidates = Object.keys(zip.files).filter(
+    (name) =>
+      !zip.files[name].dir &&
+      (/\.(lifeforms|json)$/i.test(name) || /\.outerflow\.json$/i.test(name))
+  );
+  if (candidates.length === 0) {
+    throw new Error('No .lifeforms or .json project file found inside the .zip archive.');
+  }
+  const preferred =
+    candidates.find((n) => /\.lifeforms$/i.test(n)) ?? candidates[0];
+  const text = await zip.files[preferred].async('string');
+  const scene = parseSceneJSON(text);
+  const fileName = preferred.split('/').pop() || `${file.name.replace(/\.zip$/i, '')}.lifeforms`;
+  return { scene, fileName };
 }

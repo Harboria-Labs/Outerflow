@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { ChevronsLeft, ChevronsRight } from 'lucide-react';
 import type {
   CadPartConfig,
   CadPrimitiveKind,
@@ -118,10 +117,12 @@ import {
   capturePNG,
   exportGLB,
   exportOBJ,
+  exportProjectAsZip,
   exportSTL,
   exportSceneJSON,
   exportSweepCSV,
   exportTelemetryCSV,
+  importProjectFromZip,
   parseSceneJSON,
 } from './engines/io/exporters';
 import {
@@ -257,7 +258,16 @@ export const App: React.FC = () => {
   const [designRuns, setDesignRuns] = useState<DesignExperimentRun[]>(
     () => savedProj?.designRuns ?? []
   );
-  const [autosavedAt, setAutosavedAt] = useState<string | null>(null);
+  const [projectName, setProjectName] = useState<string>(() =>
+    savedProj?.activePhysicsPresetId
+      ? `${savedProj.activePhysicsPresetId}.lifeforms`
+      : `${initialPreset.id}.lifeforms`
+  );
+  const [autosavedAt, setAutosavedAt] = useState<string | null>(() =>
+    typeof window !== 'undefined'
+      ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : null
+  );
   const [undoStack, setUndoStack] = useState<ProjectSnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<ProjectSnapshot[]>([]);
   const lastHistoryTsRef = useRef(0);
@@ -613,6 +623,9 @@ export const App: React.FC = () => {
 
     const vp = new StudioViewport(host, {
       onSelectObject: (id) => {
+        if (modeRef.current === 'electronics' && id) {
+          setSelectedCircuitCompId(id);
+        }
         setSelectedId(id);
         vp.setSelectedId(id);
       },
@@ -1099,6 +1112,7 @@ export const App: React.FC = () => {
     pushHistorySnapshot(true);
     setRunning(false);
     setActivePhysicsPresetId(p.id);
+    setProjectName(`${p.id}.lifeforms`);
     scriptStepCallbackRef.current = null;
     customMetricsRef.current = {};
     const clonedEnts = structuredClone(p.entities);
@@ -1434,6 +1448,54 @@ export const App: React.FC = () => {
     const part = createCadPartFromLibrary(meta, cadParts.length + 1);
     setCadParts((prev) => [...prev, part]);
     setSelectedId(part.id);
+  };
+
+  const handleSpawnHardwareInPhysics = (meta: LibraryPartMeta) => {
+    pushHistorySnapshot(true);
+    const part = createCadPartFromLibrary(meta, cadParts.length + 1);
+    const geom = createParametricGeometry(part);
+    const serialized = serializeBufferGeometry(geom);
+    geom.dispose();
+
+    const ent = syncEntityPhysicalMass({
+      id: `hw-phys-${meta.id}-${Date.now()}`,
+      name: meta.name,
+      category: 'cad',
+      cadLinkId: part.id,
+      shape: 'custom',
+      bodyType: 'dynamic',
+      position: [(entities.length % 3 - 1) * 0.9, 1.8, 0],
+      rotation: [0, 0, 0],
+      scale: [1, 1, 1],
+      size: {
+        width: part.width,
+        height: part.height,
+        depth: part.depth,
+        radius: part.outerRadius,
+      },
+      color: meta.defaultColor,
+      metalness: 0.35,
+      roughness: 0.35,
+      opacity: 1,
+      visible: true,
+      density: 2700,
+      materialPreset: 'aluminum',
+      serializedMesh: serialized,
+      physics: {
+        mass: 1.5,
+        friction: 0.5,
+        restitution: 0.3,
+        linearDamping: 0.02,
+        angularDamping: 0.04,
+        initialVelocity: [0, 0, 0],
+        colliderKind: 'convexHull',
+      },
+    });
+    const next = [...entities, ent];
+    setEntities(next);
+    setCadParts((prev) => [...prev, part]);
+    setSelectedId(ent.id);
+    void syncPhysicsWorldAndViewport(next, joints, gravity);
   };
 
   const handleUpdateCadPart = (id: string, patch: Partial<CadPartConfig>) => {
@@ -2094,12 +2156,13 @@ export const App: React.FC = () => {
       parameters,
       designRuns,
     };
-    exportSceneJSON(file, 'outerflow-project.outerflow.json');
+    const fileName = projectName.endsWith('.lifeforms')
+      ? projectName
+      : `${projectName}.lifeforms`;
+    exportSceneJSON(file, fileName);
   };
 
-  const handleLoadScene = async (file: File) => {
-    const text = await file.text();
-    const parsed = parseSceneJSON(text);
+  const applyParsedSceneFile = (parsed: OuterflowSceneFile, fileName?: string) => {
     pushHistorySnapshot(true);
     setRunning(false);
     setMode(parsed.mode);
@@ -2113,9 +2176,50 @@ export const App: React.FC = () => {
     if (parsed.parameters) setParameters(parsed.parameters);
     if (parsed.designRuns) setDesignRuns(parsed.designRuns);
     if (parsed.logoConfig) setLogoConfig(parsed.logoConfig);
+    if (fileName) {
+      setProjectName(fileName.endsWith('.lifeforms') ? fileName : `${fileName}.lifeforms`);
+    }
     void syncPhysicsWorldAndViewport(parsed.entities, parsed.joints, parsed.gravity);
     rebuildMathViewport(parsed.mathConfig);
     rebuildSoftViewport(parsed.softConfig);
+  };
+
+  const handleLoadScene = async (file: File) => {
+    const text = await file.text();
+    const parsed = parseSceneJSON(text);
+    applyParsedSceneFile(parsed, file.name);
+  };
+
+  const handleExportZip = async () => {
+    const file: OuterflowSceneFile = {
+      format: 'outerflow-scene',
+      version: 1,
+      savedAt: new Date().toISOString(),
+      mode,
+      gravity,
+      entities,
+      joints,
+      cadParts,
+      mathConfig,
+      softConfig,
+      experimentScript,
+      logoConfig,
+      parameters,
+      designRuns,
+    };
+    await exportProjectAsZip({
+      projectName,
+      scene: file,
+      rootObject: viewportRef.current?.getExportTarget(mode) ?? null,
+      telemetrySamples,
+      sweepResults,
+      scriptCode: experimentScript,
+    });
+  };
+
+  const handleImportZip = async (file: File) => {
+    const { scene, fileName } = await importProjectFromZip(file);
+    applyParsedSceneFile(scene, fileName);
   };
 
   const handleToggleVideoRecord = async () => {
@@ -2182,6 +2286,7 @@ export const App: React.FC = () => {
     pushHistorySnapshot(true);
     setRunning(false);
     setActivePhysicsPresetId('blank-project');
+    setProjectName('untitled-project.lifeforms');
     setEntities([]);
     setJoints([]);
     setCadParts([]);
@@ -2217,19 +2322,25 @@ export const App: React.FC = () => {
   const latestTelemetry = telemetrySamples[telemetrySamples.length - 1];
 
   return (
-    <div className="studio-shell">
+    <div
+      className={`studio-shell ${!leftCollapsed ? 'left-open' : ''} ${
+        !rightCollapsed ? 'right-open' : ''
+      } ${!leftCollapsed && !rightCollapsed ? 'both-open' : ''}`}
+    >
       <TopBar
         mode={mode}
         onModeChange={handleModeChange}
         stage={stage}
         onStageChange={setStage}
         logoConfig={logoConfig}
+        projectName={projectName}
+        onProjectNameChange={setProjectName}
         telemetryOpen={telemetryOpen}
         onToggleTelemetry={() => setTelemetryOpen((o) => !o)}
         scriptOpen={scriptConsoleOpen}
         onToggleScript={() => setScriptConsoleOpen((o) => !o)}
-        zenMode={zenMode}
-        onToggleZenMode={handleToggleZenMode}
+        infoOpen={!rightCollapsed}
+        onToggleInfo={() => setRightCollapsed((c) => !c)}
         canUndo={undoStack.length > 0}
         canRedo={redoStack.length > 0}
         onUndo={handleUndo}
@@ -2244,6 +2355,8 @@ export const App: React.FC = () => {
         onResetSim={handleReset}
         onSaveScene={handleSaveScene}
         onLoadScene={handleLoadScene}
+        onExportZip={() => void handleExportZip()}
+        onImportZip={(f) => void handleImportZip(f)}
         onExportGLB={() => {
           const t = viewportRef.current?.getExportTarget(mode);
           if (t) void exportGLB(t, `outerflow-${mode}.glb`);
@@ -2264,13 +2377,65 @@ export const App: React.FC = () => {
           viewportRef.current?.captureTransparentPNG(`outerflow-${mode}-transparent.png`);
         }}
         onPrintSheet={handlePrintDesignSheet}
+        physicsPresets={physicsPresets}
+        activePhysicsPresetId={activePhysicsPresetId}
+        onLoadPhysicsPreset={handleLoadPhysicsPreset}
+        snapToGrid={snapToGrid}
+        onToggleSnapToGrid={setSnapToGrid}
+        onAlignGround={() => {
+          if (selectedId) {
+            if (mode === 'cad') handleSnapCadPart(selectedId, null, 'ground');
+            else handleAlignEntity(selectedId, null, 'ground');
+          }
+        }}
+        onAlignOnTop={() => {
+          if (selectedId && mode === 'cad') {
+            const idx = cadParts.findIndex((p) => p.id === selectedId);
+            const target = idx > 0 ? cadParts[idx - 1]?.id ?? null : null;
+            handleSnapCadPart(selectedId, target, 'onTop');
+          } else if (selectedId) {
+            const idx = entities.findIndex((e) => e.id === selectedId);
+            const target = idx > 0 ? entities[idx - 1]?.id ?? null : null;
+            handleAlignEntity(selectedId, target, 'onTop');
+          }
+        }}
+        onAlignRight={() => {
+          if (selectedId && mode === 'cad') {
+            const idx = cadParts.findIndex((p) => p.id === selectedId);
+            const target = idx > 0 ? cadParts[idx - 1]?.id ?? null : null;
+            handleSnapCadPart(selectedId, target, 'toRight');
+          } else if (selectedId) {
+            const idx = entities.findIndex((e) => e.id === selectedId);
+            const target = idx > 0 ? entities[idx - 1]?.id ?? null : null;
+            handleAlignEntity(selectedId, target, 'toRight');
+          }
+        }}
+        onDuplicateSelected={() => {
+          if (selectedId && (mode === 'physics' || mode === 'experiments')) {
+            handleDuplicateEntity(selectedId);
+          }
+        }}
+        onToggleLockSelected={() => {
+          if (!selectedId) return;
+          if (mode === 'cad') handleToggleCadLocked(selectedId);
+          else handleToggleEntityLocked(selectedId);
+        }}
+        onDeleteSelected={() => {
+          if (!selectedId) return;
+          if (mode === 'cad') handleDeleteCadPart(selectedId);
+          else handleDeleteEntity(selectedId);
+        }}
       />
 
       <div className="workspace-body">
-        {!leftCollapsed && mode !== 'system' && (
+        {mode !== 'system' && (
           <LeftPanel
             mode={mode}
+            collapsed={leftCollapsed}
+            onToggleCollapse={() => setLeftCollapsed((c) => !c)}
+            onExpand={() => setLeftCollapsed(false)}
             onCollapse={() => setLeftCollapsed(true)}
+            onSpawnHardwareInPhysics={handleSpawnHardwareInPhysics}
             stage={stage}
             onStageChange={setStage}
             onResetStage={() => setStage(createDefaultStageSettings())}
@@ -2325,29 +2490,6 @@ export const App: React.FC = () => {
         <main className="center-column">
           <div className="viewport-wrap">
             <div ref={viewportHostRef} className="viewport-canvas-host" />
-
-            {leftCollapsed && (
-              <button
-                type="button"
-                className="panel-reopen-btn left"
-                style={{ top: 82 }}
-                onClick={() => setLeftCollapsed(false)}
-                title="Expand Left Studio Panel"
-              >
-                <ChevronsRight size={14} />
-              </button>
-            )}
-
-            {rightCollapsed && (
-              <button
-                type="button"
-                className="panel-reopen-btn right"
-                onClick={() => setRightCollapsed(false)}
-                title="Expand Info Inspector"
-              >
-                <ChevronsLeft size={14} />
-              </button>
-            )}
 
             <DynamicIslandHUD
               mode={mode}
@@ -2416,10 +2558,22 @@ export const App: React.FC = () => {
               }
               onCameraPreset={(p: CameraPreset) => viewportRef.current?.setCameraPreset(p)}
               onFocusSelected={() => viewportRef.current?.focusSelected()}
-              telemetryOpen={telemetryOpen}
               onToggleTelemetry={() => setTelemetryOpen((o) => !o)}
               zenMode={zenMode}
               onToggleZenMode={handleToggleZenMode}
+              snapToGrid={snapToGrid}
+              onToggleSnapToGrid={setSnapToGrid}
+              onAlignGround={() => {
+                if (selectedId) {
+                  if (mode === 'cad') handleSnapCadPart(selectedId, null, 'ground');
+                  else handleAlignEntity(selectedId, null, 'ground');
+                }
+              }}
+              onDuplicateSelected={() => {
+                if (selectedId && (mode === 'physics' || mode === 'experiments')) {
+                  handleDuplicateEntity(selectedId);
+                }
+              }}
             />
 
             <ElectronicsSchematicView
